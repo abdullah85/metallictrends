@@ -67,10 +67,12 @@ def mock_30_day_response():
 @pytest.fixture
 def mock_invalid_key_response():
     """Simulates a 401 Unauthorized response from the API.
-    raise_for_status() raises HTTPError, as requests does for 4xx responses."""
+    raise_for_status() raises HTTPError with e.response.status_code == 401."""
+    http_response = Mock()
+    http_response.status_code = 401
     mock = Mock()
     mock.raise_for_status.side_effect = requests.exceptions.HTTPError(
-        "401 Unauthorized: Invalid API key"
+        "401 Unauthorized: Invalid API key", response=http_response
     )
     return mock
 
@@ -78,9 +80,11 @@ def mock_invalid_key_response():
 @pytest.fixture
 def mock_http_error_response():
     """Simulates a server-side failure (500) or rate limit error (429).
-    Used to verify the orchestrator marks the window as failed and continues."""
+    raise_for_status() raises HTTPError with e.response.status_code == 500."""
+    http_response = Mock()
+    http_response.status_code = 500
     mock = Mock()
     mock.raise_for_status.side_effect = requests.exceptions.HTTPError(
-        "500 Internal Server Error"
+        "500 Internal Server Error", response=http_response
     )
     return mock
