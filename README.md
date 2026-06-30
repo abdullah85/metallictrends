@@ -92,6 +92,7 @@ metallictrends/
 │   ├── test_db.py         # Tests for save_metal_prices, save_fx_rates, update_window_status in db.py
 │   └── test_run.py        # Tests for window chunking, state transitions, and failure handling in run.py
 ├── data/                  # Git-ignored — stores .db backups and CSV exports
+├── media/                 # Screenshots documenting the backfill session
 ├── .env.example           # API key template
 └── pyproject.toml         # Project metadata and dependencies
 ```
@@ -107,3 +108,19 @@ Price records are stored in `metals.db`, a local SQLite database with three tabl
 `metals.db` is excluded from version control.
 
 Use `python backup.py` to create a safe copy after each successful run.
+
+## In Action
+
+The screenshots below document a real backfill session against the metals.dev free tier (100 requests/month).
+
+**After the first run (June 2026) — 65 of 100 requests used:**
+
+![metals.dev dashboard showing 65/100 requests used](media/20260630_2351_metals_dev_dashboard_65_requests_used.png)
+
+**Data confirmation — earliest record at 2021-01-01:**
+
+![Claude Code session showing earliest data at 2021-01-01](media/20260630_2356_claude_code_earliest_data_2021_01_01.png)
+
+**After extending the backfill to 2018-02-01 — quota fully consumed:**
+
+![metals.dev dashboard showing 100/100 requests used](media/20260630_2358_metals_dev_dashboard_100_requests_used.png)
