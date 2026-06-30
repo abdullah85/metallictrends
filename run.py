@@ -13,7 +13,7 @@ def chunk_date_range(start_date: str, end_date: str) -> list[tuple[str, str]]:
     windows = []
     current = start
     while current <= end:
-        window_end = min(current + timedelta(days=29), end)
+        window_end = min(current + timedelta(days=30), end)
         windows.append((current.isoformat(), window_end.isoformat()))
         current = window_end + timedelta(days=1)
     return windows
