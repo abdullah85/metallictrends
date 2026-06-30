@@ -82,15 +82,18 @@ No API key required. All HTTP calls are intercepted by `unittest.mock`.
 
 ```
 metallictrends/
-├── client.py        # Calls the metals.dev timeseries endpoint for a given date window
-├── db.py            # SQLite schema, record insertion, and window status updates
-├── run.py           # Backfill orchestrator — the main script to run
-├── backup.py        # Timestamped database backup and CSV export
+├── client.py              # Calls the metals.dev timeseries endpoint for a given date window
+├── db.py                  # SQLite schema, record insertion, and window status updates
+├── run.py                 # Backfill orchestrator — the main script to run
+├── backup.py              # Timestamped database backup and CSV export
 ├── tests/
-│   └── test_all.py  # Full test suite using pytest and unittest.mock
-├── data/            # Git-ignored — stores .db backups and CSV exports
-├── .env.example     # API key template
-└── pyproject.toml   # Project metadata and dependencies
+│   ├── conftest.py        # Shared pytest fixtures available to all test files automatically
+│   ├── test_client.py     # Tests for fetch_timeseries in client.py
+│   ├── test_db.py         # Tests for save_metal_prices, save_fx_rates, update_window_status in db.py
+│   └── test_run.py        # Tests for window chunking, state transitions, and failure handling in run.py
+├── data/                  # Git-ignored — stores .db backups and CSV exports
+├── .env.example           # API key template
+└── pyproject.toml         # Project metadata and dependencies
 ```
 
 ## Data Storage
