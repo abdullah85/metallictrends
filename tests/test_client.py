@@ -25,3 +25,9 @@ def test_fetch_timeseries_raises_on_server_error(mock_http_error_response):
         with pytest.raises(requests.exceptions.HTTPError) as exc_info:
             fetch_timeseries("2023-01-01", "2023-01-10")
     assert exc_info.value.response.status_code == 500
+
+
+def test_fetch_timeseries_raises_on_window_exceeding_30_days():
+    """fetch_timeseries raises ValueError when the window is 31 days or more."""
+    with pytest.raises(ValueError):
+        fetch_timeseries("2023-01-01", "2023-01-31")
