@@ -18,7 +18,7 @@ def fetch_timeseries(start_date: str, end_date: str) -> dict:
     """
     start = date.fromisoformat(start_date)
     end = date.fromisoformat(end_date)
-    if (end - start).days >= _MAX_WINDOW_DAYS:
+    if (end - start).days > _MAX_WINDOW_DAYS:
         raise ValueError(
             f"Window from {start_date} to {end_date} exceeds {_MAX_WINDOW_DAYS} days"
         )
