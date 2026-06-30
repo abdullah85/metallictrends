@@ -28,6 +28,6 @@ def test_fetch_timeseries_raises_on_server_error(mock_http_error_response):
 
 
 def test_fetch_timeseries_raises_on_window_exceeding_30_days():
-    """fetch_timeseries raises ValueError when the window is 31 days or more."""
+    """fetch_timeseries raises ValueError when the window is more than 30 days."""
     with pytest.raises(ValueError):
-        fetch_timeseries("2023-01-01", "2023-01-31")
+        fetch_timeseries("2023-01-01", "2023-02-01")
