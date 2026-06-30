@@ -6,6 +6,12 @@ from datetime import date, timedelta
 from sample_data import SAMPLE_10_DAY_RATES
 
 
+@pytest.fixture(autouse=True)
+def _fake_api_key(monkeypatch):
+    """Set a dummy API key for every test so client.py can be imported without a .env file."""
+    monkeypatch.setenv("METALS_API_KEY", "test-key")
+
+
 def _extend_rates(start, end):
     """Synthesises a rates dict for any date range by cycling through
     SAMPLE_10_DAY_RATES entries. Each day gets distinct metals and currency
