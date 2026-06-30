@@ -1,24 +1,5 @@
-import sqlite3
 import pytest
 from db import save_metal_prices, save_fx_rates, update_window_status
-
-
-@pytest.fixture
-def db_conn():
-    """In-memory SQLite connection with full schema created.
-    Isolated per test — closed and discarded after each test function."""
-    conn = sqlite3.connect(":memory:")
-    conn.executescript("""
-        CREATE TABLE metal_prices (date TEXT, metal TEXT, price_usd REAL);
-        CREATE TABLE fx_rates (date TEXT, currency TEXT, rate_to_usd REAL);
-        CREATE TABLE backfill_windows (
-            start_date TEXT, end_date TEXT,
-            status TEXT CHECK(status IN ('pending', 'fetched', 'failed')),
-            fetched_at TEXT
-        );
-    """)
-    yield conn
-    conn.close()
 
 
 def test_save_metal_prices_inserts_4_rows(db_conn, mock_10_day_response):
