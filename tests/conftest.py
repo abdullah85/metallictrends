@@ -1,9 +1,28 @@
+import sqlite3
 import pytest
 import requests
 from unittest.mock import Mock
 from datetime import date, timedelta
 
 from sample_data import SAMPLE_10_DAY_RATES
+
+
+@pytest.fixture
+def db_conn():
+    """In-memory SQLite connection with full schema created.
+    Isolated per test — closed and discarded after each test function."""
+    conn = sqlite3.connect(":memory:")
+    conn.executescript("""
+        CREATE TABLE metal_prices (date TEXT, metal TEXT, price_usd REAL);
+        CREATE TABLE fx_rates (date TEXT, currency TEXT, rate_to_usd REAL);
+        CREATE TABLE backfill_windows (
+            start_date TEXT, end_date TEXT,
+            status TEXT CHECK(status IN ('pending', 'fetched', 'failed')),
+            fetched_at TEXT
+        );
+    """)
+    yield conn
+    conn.close()
 
 
 @pytest.fixture(autouse=True)
