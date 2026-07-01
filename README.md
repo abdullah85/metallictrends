@@ -1,10 +1,16 @@
 # MetallicTrends
 
+[![Release](https://img.shields.io/github/v/release/abdullah85/metallictrends)](https://github.com/abdullah85/metallictrends/releases/tag/v0.1.0)
+
 Precious metals — gold, silver, platinum, and palladium — have shaped economies and driven markets for centuries. MetallicTrends is a platform for exploring how their prices evolve over time: what drives long-term trends, how different metals correlate, and what patterns emerge from years of daily market data. Currently, we use [metals.dev](https://metals.dev/) to build a resilient ingestion layer that collects historical prices for any date range you specify and stores them in a structured local database — the foundation on which analysis, visualisation, and APIs can be built.
 
 ## Overview
 
 MetallicTrends retrieves daily price data for any date range you specify using the [metals.dev timeseries](https://www.metals.dev/docs#timeseries-endpoint) API. Because the API returns a maximum of 30 days per request, the tool automatically splits your range into windows, tracks the status of each in the database, and resumes from the last successful point if interrupted, **without** re-fetching data already retrieved. The retrieved data cannot be listed publicly and hence, the project includes a backup utility that produces timestamped copies of the SQLite database and exports price records to CSV for portability.
+
+## Releases
+
+**[v0.1.0](https://github.com/abdullah85/metallictrends/releases/tag/v0.1.0)** — Initial release: the resumable metals.dev ingestion pipeline, SQLite storage, and backup/export tooling described below.
 
 ## Technical Highlights
 
