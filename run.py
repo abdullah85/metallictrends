@@ -48,6 +48,7 @@ def run_backfill(conn: sqlite3.Connection, start_date: str, end_date: str) -> No
             update_window_status(conn, start, end, "fetched")
         except Exception:
             update_window_status(conn, start, end, "failed")
+            # TODO: log failure details for debugging, e.g., using logging module or print statements
 
 
 def main() -> None:

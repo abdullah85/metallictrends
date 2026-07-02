@@ -7,18 +7,21 @@ def init_db(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS metal_prices (
             date    TEXT NOT NULL,
             metal   TEXT NOT NULL,
-            price_usd REAL NOT NULL
+            price_usd REAL NOT NULL,
+            UNIQUE(date, metal)
         );
         CREATE TABLE IF NOT EXISTS fx_rates (
             date        TEXT NOT NULL,
             currency    TEXT NOT NULL,
-            rate_to_usd REAL NOT NULL
+            rate_to_usd REAL NOT NULL,
+            UNIQUE(date, currency)
         );
         CREATE TABLE IF NOT EXISTS backfill_windows (
             start_date TEXT NOT NULL,
             end_date   TEXT NOT NULL,
             status     TEXT NOT NULL CHECK(status IN ('pending', 'fetched', 'failed')),
-            fetched_at TEXT
+            fetched_at TEXT,
+            UNIQUE(start_date, end_date)
         );
     """)
 
