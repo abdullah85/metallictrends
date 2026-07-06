@@ -2,7 +2,7 @@ import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -23,6 +23,14 @@ def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _require_same_origin(request: Request) -> None:
+    """Blocks calls that don't carry browser fetch-metadata proving they came from
+    our own page — keeps /api/metals and /api/prices for the site's own UI only.
+    Doesn't apply to /api/widget, which is meant to be embedded on other sites."""
+    if request.headers.get("sec-fetch-site") not in ("same-origin", "same-site"):
+        raise HTTPException(403, "This endpoint is only accessible from the MetallicTrends site.")
 
 
 def _validate_metal(metal: str) -> str:
@@ -69,14 +77,14 @@ def _inr_rate(conn: sqlite3.Connection, on_date: str) -> float:
     return row["rate_to_usd"]
 
 
-@app.get("/api/metals")
+@app.get("/api/metals", dependencies=[Depends(_require_same_origin)])
 def list_metals():
     """Latest snapshot (price + 1d/7d/30d change) for all four metals — powers the site's stat tiles."""
     with _connect() as conn:
         return [_snapshot(conn, metal) for metal in METALS]
 
 
-@app.get("/api/prices/{metal}")
+@app.get("/api/prices/{metal}", dependencies=[Depends(_require_same_origin)])
 def price_history(metal: str, days: int = Query(150, ge=1, le=400)):
     """Capped time series for the site's own charts. Not a bulk-export endpoint: `days` is clamped to 400."""
     _validate_metal(metal)

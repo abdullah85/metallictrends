@@ -1,0 +1,9 @@
+# metals.db is gitignored here (data can't be redistributed publicly) — Render must
+# be pointed at the private metallictrends-deploy mirror, which includes the db file.
+services:
+  - type: web
+    name: metallictrends
+    runtime: python
+    plan: free
+    buildCommand: pip install -e ".[web]"
+    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
