@@ -11,9 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `web/index.html` — a browser dashboard for viewing stored price data, with finalized frontend aesthetics.
 - `api.py` — a `/api/metals` and `/api/prices` HTTP API serving data from the SQLite store.
 - `render.yaml` for deploying the API to Render.
+- `frontend/` — a React + Vite portfolio tracking tool: log metal purchases, chart holdings performance
+  against spot price, and import/export transactions as CSV. Built and served from `web/portfolio/`,
+  opened as an inline modal from the dashboard's stat tiles.
+- `GET /api/prices/{metal}` now accepts `start`/`end` date-range params (uncapped, for the portfolio
+  tool's arbitrary purchase-date lookback) alongside the existing capped `days` window.
+- `GET /api/prices/{metal}/on/{on_date}` — price on a given date, or the closest prior trading date,
+  used to default the portfolio tool's price field.
 
 ### Changed
 - Locked `/api/metals` and `/api/prices` to same-origin requests.
+- Dashboard stat tiles are now clickable, opening the portfolio tracker modal.
 
 ### Fixed
 - Added `UNIQUE` constraints on schema tables and reused `init_db` in tests to prevent duplicate rows.
