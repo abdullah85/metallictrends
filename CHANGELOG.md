@@ -18,14 +18,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `days` window, powering the landing page's full-history range picker (1W through ALL).
 - `GET /api/fx/{currency}` — daily FX rate history (uncapped `start`/`end`), so the site can convert
   the full price history to INR using each day's actual rate instead of one approximated rate.
+- `GET /` is now a proper FastAPI route (Jinja2, `api.py`'s `_latest_meta`) instead of a static file:
+  the hero ingot's price, batch date, "last update" date, and the trust-strip's day count are
+  computed straight from the database at request time, so the page never carries a placeholder
+  value for them.
+- `web/assets/style.css`, `web/assets/script.js`, `web/assets/hero-preview.png` — the page's CSS,
+  JS, and hero screenshot, previously inlined into `index.html` (including as base64 data URIs for
+  fonts and the hero image), extracted into their own linked files. Cut `index.html` from ~210KB to
+  ~44KB.
 - `render.yaml` for deploying the API to Render.
 
 ### Changed
 - Locked `/api/metals`, `/api/prices`, and `/api/fx` to same-origin requests.
 - INR prices now use the real daily USD→INR rate for each date, instead of a single rate derived
   from the latest day and applied across the whole history.
-- Ingot batch date, "last update" date, and the trust-strip's day count are now derived from the
-  live data on load instead of being hardcoded.
+- `index.html` now declares a proper `<!DOCTYPE html>`/`<html>`/`<head>`/`<body>` document structure
+  with a charset and viewport meta tag, instead of a bare fragment with neither — the missing
+  viewport tag meant mobile browsers were rendering the page at desktop width and scaling it down.
 
 ### Removed
 - `frontend/` — the React + Vite portfolio tracking tool (buy/sell logging, CSV import/export against

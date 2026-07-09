@@ -4,8 +4,9 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 
 GRAMS_PER_TROY_OZ = 31.1034768
 METALS = ("gold", "silver", "platinum", "palladium")
@@ -17,6 +18,7 @@ app.add_middleware(
     allow_origins=["*"],
     allow_methods=["GET"],
 )
+templates = Jinja2Templates(directory="web")
 
 
 def _connect() -> sqlite3.Connection:
@@ -89,6 +91,33 @@ def _inr_rate(conn: sqlite3.Connection, on_date: str) -> float:
     if row is None:
         raise HTTPException(404, "No INR exchange rate available for this date.")
     return row["rate_to_usd"]
+
+
+def _latest_meta(conn: sqlite3.Connection) -> dict:
+    """Server-rendered context for index.html's hero ingot and trust-strip. Computed
+    from the DB at request time so the page never carries a placeholder value that
+    could be mistaken for real data — there's no "default" because there's no gap for
+    one to fill. Gold is the reference metal since every metal is ingested in the same
+    daily run and shares an identical date range (see run.py's backfill orchestrator)."""
+    snapshot = _snapshot(conn, "gold")
+    count_row = conn.execute("SELECT COUNT(*) AS n FROM metal_prices WHERE metal = 'gold'").fetchone()
+    latest_date = date.fromisoformat(snapshot["date"])
+    return {
+        "ingot_number": f"{snapshot['price_usd']:.1f}",
+        "batch_date": snapshot["date"],
+        "last_update": f"{latest_date.strftime('%b')} {latest_date.day}, {latest_date.year}",
+        "days_count": f"{count_row['n']:,}",
+    }
+
+
+@app.get("/", response_class=HTMLResponse)
+def index(request: Request):
+    """Renders the landing page itself, injecting `_latest_meta`'s values server-side.
+    Must be registered before the StaticFiles mount below so it wins for the exact "/"
+    path; the mount still serves everything else (assets/, etc.)."""
+    with _connect() as conn:
+        context = _latest_meta(conn)
+    return templates.TemplateResponse(request, "index.html", context)
 
 
 @app.get("/api/metals", dependencies=[Depends(_require_same_origin)])
