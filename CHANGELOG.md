@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.2.0] - 2026-07-09
+
+Landing page rebuilt around a single interactive, multi-range price chart and served directly
+from FastAPI with server-rendered live data, replacing the earlier React portfolio-tracker
+prototype.
+
 ### Added
 - `web/index.html` — self-contained landing page built around a single interactive price chart:
   metal selector (gold/silver/platinum/palladium), preset and custom date ranges, a USD/₹ unit
