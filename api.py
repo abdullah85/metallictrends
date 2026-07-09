@@ -3,6 +3,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Path as PathParam
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -48,6 +49,30 @@ def _series(conn: sqlite3.Connection, metal: str, days: int) -> list[sqlite3.Row
     ).fetchall()
 
 
+def _series_range(
+    conn: sqlite3.Connection, metal: str, start: str | None, end: str | None
+) -> list[sqlite3.Row]:
+    query = "SELECT date, price_usd FROM metal_prices WHERE metal = ?"
+    params: list[str] = [metal]
+    if start:
+        query += " AND date >= ?"
+        params.append(start)
+    if end:
+        query += " AND date <= ?"
+        params.append(end)
+    return conn.execute(query + " ORDER BY date", params).fetchall()
+
+
+def _price_on_or_before(conn: sqlite3.Connection, metal: str, on_date: str) -> sqlite3.Row:
+    row = conn.execute(
+        "SELECT date, price_usd FROM metal_prices WHERE metal = ? AND date <= ? ORDER BY date DESC LIMIT 1",
+        (metal, on_date),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(404, f"No price data for '{metal}' on or before {on_date}.")
+    return row
+
+
 def _pct_change(latest: float, past: float) -> float:
     return round((latest - past) / past * 100, 2) if past else 0.0
 
@@ -85,12 +110,30 @@ def list_metals():
 
 
 @app.get("/api/prices/{metal}", dependencies=[Depends(_require_same_origin)])
-def price_history(metal: str, days: int = Query(150, ge=1, le=400)):
-    """Capped time series for the site's own charts. Not a bulk-export endpoint: `days` is clamped to 400."""
+def price_history(
+    metal: str,
+    days: int | None = Query(None, ge=1, le=400),
+    start: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    end: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+):
+    """Time series for the site's own charts. With no params, a 400-day-capped trailing
+    window (not a bulk-export endpoint). With `start`/`end`, an uncapped range for the
+    portfolio tool, which needs prices from an arbitrary past purchase date to today —
+    still same-origin locked, and bounded by the table's own ~3,000 rows either way."""
     _validate_metal(metal)
     with _connect() as conn:
-        rows = _series(conn, metal, days)
+        rows = _series_range(conn, metal, start, end) if (start or end) else _series(conn, metal, days or 150)
         return [{"date": r["date"], "price_usd": r["price_usd"]} for r in rows]
+
+
+@app.get("/api/prices/{metal}/on/{on_date}", dependencies=[Depends(_require_same_origin)])
+def price_on_date(metal: str, on_date: str = PathParam(..., pattern=r"^\d{4}-\d{2}-\d{2}$")):
+    """Price on the given date, or the closest prior trading date if the market was
+    closed that day — used to default the portfolio tool's price field."""
+    _validate_metal(metal)
+    with _connect() as conn:
+        row = _price_on_or_before(conn, metal, on_date)
+        return {"metal": metal, "date": row["date"], "price_usd": row["price_usd"]}
 
 
 @app.get("/api/widget/{metal}")

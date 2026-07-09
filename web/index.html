@@ -115,9 +115,21 @@ nav.top-links a:focus-visible { outline: 1px solid var(--gold-1); outline-offset
 .stat-price-unit { font-size: 13px; color: var(--ink-faint); font-family: var(--font-body); }
 
 .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
-.stat-tile { background: var(--card); border: 1px solid var(--rule); border-radius: 5px; padding: 20px 20px 18px; position: relative; }
-.stat-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 14px; }
+.stat-tile {
+  background: var(--card); border: 1px solid var(--rule); border-radius: 5px; padding: 20px 20px 18px; position: relative;
+  cursor: pointer; text-align: left; width: 100%; font: inherit; color: inherit;
+  transition: border-color 0.15s ease, transform 0.1s ease;
+}
+.stat-tile:hover { border-color: var(--gold-2); }
+.stat-tile:active { transform: translateY(1px); }
+.stat-tile:focus-visible { outline: 2px solid var(--gold-1); outline-offset: 2px; }
+.stat-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 14px; gap: 8px; }
 .stat-name { font-family: var(--font-display); font-size: 15.5px; }
+.stat-expand {
+  font-family: var(--font-mono); font-size: 10px; color: var(--ink-faint); letter-spacing: 0.04em;
+  opacity: 0; transition: opacity 0.15s ease; white-space: nowrap;
+}
+.stat-tile:hover .stat-expand, .stat-tile:focus-visible .stat-expand { opacity: 1; }
 .stat-ticker { font-family: var(--font-mono); font-size: 10.5px; color: var(--metal-color); border: 1px solid var(--rule); padding: 1px 6px; border-radius: 8px; }
 .stat-price { font-family: var(--font-mono); font-size: 25px; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
 .stat-chg { font-size: 12.5px; margin-top: 4px; font-variant-numeric: tabular-nums; }
@@ -188,6 +200,50 @@ footer { border-top: 1px solid var(--rule); padding: 44px 0 56px; }
   .b2c-grid, .b2b-inner, .pricing-grid { grid-template-columns: 1fr; }
   .footer-grid { flex-direction: column; align-items: flex-start; }
 }
+
+/* Portfolio modal — opens inline over the page instead of navigating to /portfolio/ */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+
+.portfolio-modal { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; padding: 28px; }
+.portfolio-modal[hidden] { display: none; }
+.portfolio-modal__backdrop { position: absolute; inset: 0; background: rgba(8,7,6,0.72); opacity: 0; transition: opacity 0.18s ease; }
+.portfolio-modal.is-open .portfolio-modal__backdrop { opacity: 1; }
+.portfolio-modal__panel {
+  position: relative; width: min(960px, 100%); height: min(720px, 100%);
+  background: var(--bg-alt); border: 1px solid var(--rule); border-radius: 7px;
+  box-shadow: 0 28px 64px rgba(0,0,0,0.55);
+  display: flex; flex-direction: column; overflow: hidden;
+  opacity: 0; transform: translateY(12px) scale(0.98); transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.portfolio-modal.is-open .portfolio-modal__panel { opacity: 1; transform: none; }
+.portfolio-modal__bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 18px; border-bottom: 1px solid var(--rule); flex: none; }
+.portfolio-modal__title { font-family: var(--font-display); font-size: 15px; color: var(--ink); }
+.portfolio-modal__title small { display: block; font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-faint); letter-spacing: 0.05em; margin-top: 3px; }
+.portfolio-modal__close {
+  flex: none; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center;
+  background: transparent; border: 1px solid var(--rule); border-radius: 4px; color: var(--ink-soft);
+  font-size: 15px; line-height: 1; cursor: pointer;
+}
+.portfolio-modal__close:hover { border-color: var(--gold-1); color: var(--gold-1); }
+.portfolio-modal__close:focus-visible { outline: 2px solid var(--gold-1); outline-offset: 2px; }
+.portfolio-modal__body { position: relative; flex: 1; background: #fff; }
+.portfolio-modal__frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; opacity: 0; transition: opacity 0.15s ease; }
+.portfolio-modal__frame.is-ready { opacity: 1; }
+.portfolio-modal__loading {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 10px;
+  font-family: var(--font-mono); font-size: 12.5px; color: var(--ink-faint); background: var(--bg-alt);
+}
+.portfolio-modal__spinner { width: 15px; height: 15px; border-radius: 50%; border: 2px solid var(--rule); border-top-color: var(--gold-1); animation: portfolio-spin 0.7s linear infinite; }
+@keyframes portfolio-spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .portfolio-modal__backdrop, .portfolio-modal__panel, .portfolio-modal__frame { transition: none; }
+  .portfolio-modal__spinner { animation-duration: 1.4s; }
+}
+@media (max-width: 720px) {
+  .portfolio-modal { padding: 0; }
+  .portfolio-modal__panel { width: 100%; height: 100%; border-radius: 0; }
+}
 </style>
 
 <div class="page">
@@ -200,7 +256,7 @@ footer { border-top: 1px solid var(--rule); padding: 44px 0 56px; }
       <nav class="top-links">
         <a href="#pricing">Pricing</a>
         <a href="#b2b">For Jewellers</a>
-        <a href="#footer">Digest</a>
+        <a href="#footer">Digest</a>Track
       </nav>
     </div>
   </header>
@@ -214,10 +270,10 @@ footer { border-top: 1px solid var(--rule); padding: 44px 0 56px; }
         </div>
         <div class="ingot-copy">
           <div class="eyebrow">Batch 2026-06-29 — refined daily</div>
-          <h1>The trend behind every ounce.</h1>
+          <h1>Track The Trends.</h1>
         </div>
       </div>
-      <p class="lede">Gold crossed $4,000 an ounce for the first time this year — then gave back 11% in a month. MetallicTrends turns eight years of daily gold, silver, platinum, and palladium data into charts anyone can read. Free to browse, no account required.</p>
+      <p class="lede">MetallicTrends turns years of daily gold, silver, platinum, and palladium data to user-friendly, interactive charts. Explore the performance of your assets. No account needed to get started.</p>
       <div class="ctas">
         <a class="btn btn-primary" href="#stats">Explore free charts</a>
         <a class="btn btn-ghost" href="#b2b">Own a jewellery store? → Get the widget</a>
@@ -225,7 +281,8 @@ footer { border-top: 1px solid var(--rule); padding: 44px 0 56px; }
       <div class="trust-strip">
         <span>3,061 days of daily data</span><span class="sep">·</span>
         <span>4 metals tracked</span><span class="sep">·</span>
-        <span>consolidated from LBMA &amp; bank benchmarks</span><span class="sep">·</span>
+        <span>consolidated from <a href="https://metals.dev/docs" target="_blank">metals.dev</a></span>
+	<span class="sep">·</span>
         <span>last update Jun 29, 2026</span>
       </div>
     </div>
@@ -240,31 +297,32 @@ footer { border-top: 1px solid var(--rule); padding: 44px 0 56px; }
           <button type="button" data-unit="inr">₹ / 10 g</button>
         </div>
       </div>
-      <p class="section-note" style="margin:-16px 0 22px">Consolidated from LBMA fixes, bank reference rates &amp; other official benchmarks — not a single exchange feed.</p>
+      <p class="section-note" style="margin:-16px 0 22px">Data obtained from
+	<a href="https://metals.dev/docs" target="_blank">metals.dev</a> a reliable source.</p>
       <div class="stat-grid">
-        <article class="stat-tile" style="--metal-color: var(--c-gold)" data-spark="gold">
-          <div class="stat-head"><span class="stat-name">Gold</span><span class="stat-ticker">XAU</span></div>
+        <article class="stat-tile" style="--metal-color: var(--c-gold)" data-spark="gold" role="button" tabindex="0" aria-haspopup="dialog" aria-label="Open full Gold chart and portfolio tool">
+          <div class="stat-head"><span class="stat-name">Gold</span><span class="stat-expand">View chart →</span><span class="stat-ticker">XAU</span></div>
           <div class="stat-price">$4,016.95<span class="stat-price-unit"> /oz</span></div>
           <div class="stat-chg stat-chg--down">▼ 1.75% today · −11.5% / 30d</div>
           <div class="spark-wrap"><svg class="spark-svg"></svg><div class="spark-tip"></div></div>
           <div class="fineness">.9999 FINE</div>
         </article>
-        <article class="stat-tile" style="--metal-color: var(--c-silver)" data-spark="silver">
-          <div class="stat-head"><span class="stat-name">Silver</span><span class="stat-ticker">XAG</span></div>
+        <article class="stat-tile" style="--metal-color: var(--c-silver)" data-spark="silver" role="button" tabindex="0" aria-haspopup="dialog" aria-label="Open full Silver chart and portfolio tool">
+          <div class="stat-head"><span class="stat-name">Silver</span><span class="stat-expand">View chart →</span><span class="stat-ticker">XAG</span></div>
           <div class="stat-price">$58.31<span class="stat-price-unit"> /oz</span></div>
           <div class="stat-chg stat-chg--down">▼ 1.49% today · −22.6% / 30d</div>
           <div class="spark-wrap"><svg class="spark-svg"></svg><div class="spark-tip"></div></div>
           <div class="fineness">.999 FINE</div>
         </article>
-        <article class="stat-tile" style="--metal-color: var(--c-platinum)" data-spark="platinum">
-          <div class="stat-head"><span class="stat-name">Platinum</span><span class="stat-ticker">XPT</span></div>
+        <article class="stat-tile" style="--metal-color: var(--c-platinum)" data-spark="platinum" role="button" tabindex="0" aria-haspopup="dialog" aria-label="Open full Platinum chart and portfolio tool">
+          <div class="stat-head"><span class="stat-name">Platinum</span><span class="stat-expand">View chart →</span><span class="stat-ticker">XPT</span></div>
           <div class="stat-price">$1,578.70<span class="stat-price-unit"> /oz</span></div>
           <div class="stat-chg stat-chg--down">▼ 2.22% today · −17.8% / 30d</div>
           <div class="spark-wrap"><svg class="spark-svg"></svg><div class="spark-tip"></div></div>
           <div class="fineness">.9995 FINE</div>
         </article>
-        <article class="stat-tile" style="--metal-color: var(--c-palladium)" data-spark="palladium">
-          <div class="stat-head"><span class="stat-name">Palladium</span><span class="stat-ticker">XPD</span></div>
+        <article class="stat-tile" style="--metal-color: var(--c-palladium)" data-spark="palladium" role="button" tabindex="0" aria-haspopup="dialog" aria-label="Open full Palladium chart and portfolio tool">
+          <div class="stat-head"><span class="stat-name">Palladium</span><span class="stat-expand">View chart →</span><span class="stat-ticker">XPD</span></div>
           <div class="stat-price">$1,218.72<span class="stat-price-unit"> /oz</span></div>
           <div class="stat-chg stat-chg--up">▲ 1.00% today · −10.2% / 30d</div>
           <div class="spark-wrap"><svg class="spark-svg"></svg><div class="spark-tip"></div></div>
@@ -272,7 +330,7 @@ footer { border-top: 1px solid var(--rule); padding: 44px 0 56px; }
         </article>
       </div>
       <details class="table-view">
-        <summary>▸ View as table</summary>
+        <summary> View as table or open <a href="/portfolio/" target="_blank">Portfolio</a> in a new tab</summary>
         <table>
           <thead><tr><th>Metal</th><th>Ticker</th><th>Price</th><th>1D</th><th>7D</th><th>30D</th></tr></thead>
           <tbody data-table-body></tbody>
@@ -288,9 +346,10 @@ footer { border-top: 1px solid var(--rule); padding: 44px 0 56px; }
         <p class="lede">No paywall on the charts that matter. Track how gold, silver, platinum, and palladium move — daily, weekly, or across the full eight-year history — and see how the four metals correlate with each other.</p>
       </div>
       <ul class="feature-list">
-        <li><span class="mark">✦</span>Daily charts for all four metals, free forever</li>
+        <li><span class="mark">✦</span>Daily charts for all four metals from authentic sources.</li>
         <li><span class="mark">✦</span>Full 8-year history, 2018 to present</li>
         <li><span class="mark">✦</span>Correlation view — how metals move together, or don't</li>
+        <li><span class="mark">✦</span>Fully interactive charts to evaluate the asset performance.</li>
         <li><span class="mark">✦</span>Weekly trend digest, straight to your inbox</li>
       </ul>
     </div>
@@ -353,7 +412,7 @@ footer { border-top: 1px solid var(--rule); padding: 44px 0 56px; }
     <div class="wrap b2b-inner">
       <div>
         <h2>Running a jewellery store?</h2>
-        <p class="lede">Customers check the day's rate before they'll talk price. Drop a live gold &amp; silver widget on your site — the same trend data powering the charts above, with your own margin layered in. Not a data feed you resell — a display you embed, so it's you publishing rates, not us competing with our own source.</p>
+        <p class="lede">Customers check the day's rate reqularly. Drop a live gold &amp; silver widget on your site — the same trend data powering the charts above. Integrate the interactive chart features and engage your visitors.</p>
         <p class="lede" style="margin-top:14px;font-size:13.5px">Give customers the same interactive valuation tool — they log their purchases and see today's value, in INR, USD, AED or their own currency, right on your page.</p>
         <a class="btn btn-ghost" style="margin-top:18px" href="#footer">Get the widget</a>
       </div>
@@ -362,11 +421,11 @@ footer { border-top: 1px solid var(--rule); padding: 44px 0 56px; }
 &lt;script src=<span class="accent">"https://metallictrends.com/widget.js"</span>
   data-metal=<span class="accent">"gold"</span>
   data-unit=<span class="accent">"10g"</span>
-  data-city=<span class="accent">"mumbai"</span>
-  data-premium=<span class="accent">"6.5"</span>
-  data-currencies=<span class="accent">"INR,USD,AED"</span>&gt;&lt;/script&gt;
+data-currencies=<span class="accent">"INR,USD,AED"</span>&gt;
+&lt;/script&gt;
 
-<span class="muted">→ renders a live rate + 90-day trend card, plus click-to-log valuation, your branding</span>
+<span class="muted">&lt;!-- <span class="muted">→ renders a live rate + 90-day trend card,
+        plus click-to-log valuation, your branding</span> --&gt;</span>
       </div>
     </div>
   </section>
@@ -383,10 +442,29 @@ footer { border-top: 1px solid var(--rule); padding: 44px 0 56px; }
       <div class="footer-links">
         <a href="#pricing">Pricing</a>
         <a href="#b2b">For Jewellers</a>
+        <a href="/portfolio/" data-portfolio-link>Portfolio</a>
         <a href="#">metallictrends.com</a>
       </div>
     </div>
   </footer>
+</div>
+
+<div class="portfolio-modal" id="portfolioModal" hidden>
+  <div class="portfolio-modal__backdrop" data-portfolio-close></div>
+  <div class="portfolio-modal__panel" role="dialog" aria-modal="true" aria-labelledby="portfolioModalTitle">
+    <span class="sr-only" tabindex="0" data-portfolio-trap="lead"></span>
+    <div class="portfolio-modal__bar">
+      <span class="portfolio-modal__title" id="portfolioModalTitle"></span>
+      <button type="button" class="portfolio-modal__close" data-portfolio-close aria-label="Close portfolio tool">✕</button>
+    </div>
+    <div class="portfolio-modal__body">
+      <div class="portfolio-modal__loading">
+        <span class="portfolio-modal__spinner" aria-hidden="true"></span>Loading chart…
+      </div>
+      <iframe class="portfolio-modal__frame" title="MetallicTrends portfolio tool"></iframe>
+    </div>
+    <span class="sr-only" tabindex="0" data-portfolio-trap="end"></span>
+  </div>
 </div>
 
 <script>
@@ -625,5 +703,99 @@ loadLiveData().catch(err => {
     el.querySelector(".stat-price").textContent = "—";
   });
 });
+
+/* Portfolio modal — clicking a stat tile opens its full chart + portfolio tool
+   inline, instead of navigating away to /portfolio/. */
+const METAL_LABELS = { gold: "Gold", silver: "Silver", platinum: "Platinum", palladium: "Palladium" };
+
+(function initPortfolioModal() {
+  const modal = document.getElementById("portfolioModal");
+  if (!modal) return;
+  const panel = modal.querySelector(".portfolio-modal__panel");
+  const closeBtn = modal.querySelector(".portfolio-modal__close");
+  const title = document.getElementById("portfolioModalTitle");
+  const frame = modal.querySelector(".portfolio-modal__frame");
+  const loading = modal.querySelector(".portfolio-modal__loading");
+  const trapLead = modal.querySelector('[data-portfolio-trap="lead"]');
+  const trapEnd = modal.querySelector('[data-portfolio-trap="end"]');
+
+  let lastFocused = null;
+  let loadedMetal = null;
+
+  function onKeydown(e) {
+    if (e.key === "Escape") close();
+  }
+
+  function onFrameMessage(e) {
+    if (e.origin !== window.location.origin) return;
+    if (e.data && e.data.source === "metallictrends-portfolio" && e.data.type === "close") close();
+  }
+
+  function open(metal, triggerEl) {
+    const label = METAL_LABELS[metal] || "Gold";
+    lastFocused = triggerEl || document.activeElement;
+    title.innerHTML = `${label} portfolio<small>Full history · log your buys · track performance</small>`;
+
+    if (loadedMetal !== metal) {
+      frame.classList.remove("is-ready");
+      loading.hidden = false;
+      frame.src = `/portfolio/?metal=${metal}`;
+      loadedMetal = metal;
+    }
+
+    modal.hidden = false;
+    document.body.style.overflow = "hidden";
+    const pageRoot = document.querySelector(".page");
+    if (pageRoot) pageRoot.inert = true;
+    requestAnimationFrame(() => modal.classList.add("is-open"));
+    closeBtn.focus();
+    document.addEventListener("keydown", onKeydown);
+  }
+
+  function close() {
+    if (modal.hidden) return;
+    modal.classList.remove("is-open");
+    document.body.style.overflow = "";
+    const pageRoot = document.querySelector(".page");
+    if (pageRoot) pageRoot.inert = false;
+    document.removeEventListener("keydown", onKeydown);
+    const finish = () => { modal.hidden = true; };
+    let done = false;
+    const onEnd = () => { if (!done) { done = true; finish(); } };
+    panel.addEventListener("transitionend", onEnd, { once: true });
+    setTimeout(onEnd, 250);
+    if (lastFocused && typeof lastFocused.focus === "function") lastFocused.focus();
+  }
+
+  frame.addEventListener("load", () => {
+    if (!loadedMetal) return;
+    frame.classList.add("is-ready");
+    loading.hidden = true;
+  });
+
+  modal.querySelectorAll("[data-portfolio-close]").forEach(el => el.addEventListener("click", close));
+  trapLead.addEventListener("focus", () => frame.focus());
+  trapEnd.addEventListener("focus", () => closeBtn.focus());
+  window.addEventListener("message", onFrameMessage);
+
+  document.querySelectorAll(".stat-tile[data-spark]").forEach(tile => {
+    const metal = tile.getAttribute("data-spark");
+    tile.addEventListener("click", () => open(metal, tile));
+    tile.addEventListener("keydown", e => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        open(metal, tile);
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-portfolio-link]").forEach(link => {
+    link.addEventListener("click", e => {
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      open(loadedMetal || "gold", link);
+    });
+  });
+})();
 
 </script>
