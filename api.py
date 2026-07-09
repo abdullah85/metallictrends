@@ -3,7 +3,6 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi import Path as PathParam
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -63,16 +62,6 @@ def _series_range(
     return conn.execute(query + " ORDER BY date", params).fetchall()
 
 
-def _price_on_or_before(conn: sqlite3.Connection, metal: str, on_date: str) -> sqlite3.Row:
-    row = conn.execute(
-        "SELECT date, price_usd FROM metal_prices WHERE metal = ? AND date <= ? ORDER BY date DESC LIMIT 1",
-        (metal, on_date),
-    ).fetchone()
-    if row is None:
-        raise HTTPException(404, f"No price data for '{metal}' on or before {on_date}.")
-    return row
-
-
 def _pct_change(latest: float, past: float) -> float:
     return round((latest - past) / past * 100, 2) if past else 0.0
 
@@ -117,23 +106,38 @@ def price_history(
     end: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
 ):
     """Time series for the site's own charts. With no params, a 400-day-capped trailing
-    window (not a bulk-export endpoint). With `start`/`end`, an uncapped range for the
-    portfolio tool, which needs prices from an arbitrary past purchase date to today —
-    still same-origin locked, and bounded by the table's own ~3,000 rows either way."""
+    window (not a bulk-export endpoint). With `start`/`end`, an uncapped range — used by
+    the landing page's own range picker (1W through ALL) — still same-origin locked, and
+    bounded by the table's own ~3,000 rows either way."""
     _validate_metal(metal)
     with _connect() as conn:
         rows = _series_range(conn, metal, start, end) if (start or end) else _series(conn, metal, days or 150)
         return [{"date": r["date"], "price_usd": r["price_usd"]} for r in rows]
 
 
-@app.get("/api/prices/{metal}/on/{on_date}", dependencies=[Depends(_require_same_origin)])
-def price_on_date(metal: str, on_date: str = PathParam(..., pattern=r"^\d{4}-\d{2}-\d{2}$")):
-    """Price on the given date, or the closest prior trading date if the market was
-    closed that day — used to default the portfolio tool's price field."""
-    _validate_metal(metal)
+@app.get("/api/fx/{currency}", dependencies=[Depends(_require_same_origin)])
+def fx_history(
+    currency: str,
+    start: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    end: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+):
+    """Daily FX rate history (rate_to_usd), mirroring /api/prices' uncapped start/end
+    range — lets the landing page convert its full price history to INR using the
+    actual rate for each day instead of a single latest-day rate applied throughout."""
+    currency = currency.upper()
+    query = "SELECT date, rate_to_usd FROM fx_rates WHERE currency = ?"
+    params: list[str] = [currency]
+    if start:
+        query += " AND date >= ?"
+        params.append(start)
+    if end:
+        query += " AND date <= ?"
+        params.append(end)
     with _connect() as conn:
-        row = _price_on_or_before(conn, metal, on_date)
-        return {"metal": metal, "date": row["date"], "price_usd": row["price_usd"]}
+        rows = conn.execute(query + " ORDER BY date", params).fetchall()
+        if not rows:
+            raise HTTPException(404, f"No FX rate data for '{currency}'.")
+        return [{"date": r["date"], "rate_to_usd": r["rate_to_usd"]} for r in rows]
 
 
 @app.get("/api/widget/{metal}")

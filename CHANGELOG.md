@@ -8,20 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- `web/index.html` — a browser dashboard for viewing stored price data, with finalized frontend aesthetics.
-- `api.py` — a `/api/metals` and `/api/prices` HTTP API serving data from the SQLite store.
+- `web/index.html` — self-contained landing page built around a single interactive price chart:
+  metal selector (gold/silver/platinum/palladium), preset and custom date ranges, a USD/₹ unit
+  toggle, permanent x/y axis labels with gridlines, and a speech-bubble-style hover readout showing
+  the price and date for any point on the line.
+- `api.py` — `/api/metals`, `/api/prices/{metal}`, `/api/fx/{currency}`, and `/api/widget/{metal}`
+  HTTP endpoints serving data from the SQLite store.
+- `GET /api/prices/{metal}` accepts `start`/`end` date-range params (uncapped) alongside the capped
+  `days` window, powering the landing page's full-history range picker (1W through ALL).
+- `GET /api/fx/{currency}` — daily FX rate history (uncapped `start`/`end`), so the site can convert
+  the full price history to INR using each day's actual rate instead of one approximated rate.
 - `render.yaml` for deploying the API to Render.
-- `frontend/` — a React + Vite portfolio tracking tool: log metal purchases, chart holdings performance
-  against spot price, and import/export transactions as CSV. Built and served from `web/portfolio/`,
-  opened as an inline modal from the dashboard's stat tiles.
-- `GET /api/prices/{metal}` now accepts `start`/`end` date-range params (uncapped, for the portfolio
-  tool's arbitrary purchase-date lookback) alongside the existing capped `days` window.
-- `GET /api/prices/{metal}/on/{on_date}` — price on a given date, or the closest prior trading date,
-  used to default the portfolio tool's price field.
 
 ### Changed
-- Locked `/api/metals` and `/api/prices` to same-origin requests.
-- Dashboard stat tiles are now clickable, opening the portfolio tracker modal.
+- Locked `/api/metals`, `/api/prices`, and `/api/fx` to same-origin requests.
+- INR prices now use the real daily USD→INR rate for each date, instead of a single rate derived
+  from the latest day and applied across the whole history.
+- Ingot batch date, "last update" date, and the trust-strip's day count are now derived from the
+  live data on load instead of being hardcoded.
+
+### Removed
+- `frontend/` — the React + Vite portfolio tracking tool (buy/sell logging, CSV import/export against
+  spot price) and its built output `web/portfolio/`, along with the inline modal used to open it from
+  the landing page and the `GET /api/prices/{metal}/on/{on_date}` endpoint that only existed to
+  support it. Simplifies the product surface for the current go-to-market plan.
 
 ### Fixed
 - Added `UNIQUE` constraints on schema tables and reused `init_db` in tests to prevent duplicate rows.
