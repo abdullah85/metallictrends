@@ -8,6 +8,8 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from run import maybe_backfill
+
 GRAMS_PER_TROY_OZ = 31.1034768
 METALS = ("gold", "silver", "platinum", "palladium")
 DB_PATH = "metals.db"
@@ -114,8 +116,12 @@ def _latest_meta(conn: sqlite3.Connection) -> dict:
 def index(request: Request):
     """Renders the landing page itself, injecting `_latest_meta`'s values server-side.
     Must be registered before the StaticFiles mount below so it wins for the exact "/"
-    path; the mount still serves everything else (assets/, etc.)."""
+    path; the mount still serves everything else (assets/, etc.). If the stored data
+    has fallen behind today, catches up (capped at 1 month/1 request per load,
+    with failed attempts capped at 3/day and spaced at least 8h apart) before
+    rendering so the page never serves data staler than it needs to."""
     with _connect() as conn:
+        maybe_backfill(conn)
         context = _latest_meta(conn)
     return templates.TemplateResponse(request, "index.html", context)
 

@@ -83,6 +83,24 @@ def mock_30_day_response():
 
 
 @pytest.fixture
+def fake_fetch_timeseries():
+    """A stand-in for client.fetch_timeseries that returns synthetic data for
+    any [start, end] window, unlike the fixed-range mock_*_response fixtures above.
+    Needed for backfill flows whose date range is computed at test time (e.g.
+    relative to `date.today()`) rather than hardcoded."""
+    def _fetch(start, end):
+        return {
+            "status": "success",
+            "currency": "USD",
+            "unit": "toz",
+            "start_date": start,
+            "end_date": end,
+            "rates": _extend_rates(start, end),
+        }
+    return _fetch
+
+
+@pytest.fixture
 def mock_invalid_key_response():
     """Simulates a 401 Unauthorized response from the API.
     raise_for_status() raises HTTPError with e.response.status_code == 401."""

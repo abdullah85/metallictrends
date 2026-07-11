@@ -23,6 +23,11 @@ def init_db(conn: sqlite3.Connection) -> None:
             fetched_at TEXT,
             UNIQUE(start_date, end_date)
         );
+        CREATE TABLE IF NOT EXISTS backfill_attempts (
+            attempt_date TEXT NOT NULL,
+            attempted_at TEXT NOT NULL,
+            status       TEXT NOT NULL CHECK(status IN ('success', 'failed'))
+        );
     """)
 
 
@@ -53,3 +58,40 @@ def update_window_status(
         (status, fetched_at, start_date, end_date),
     )
     conn.commit()
+
+
+def record_backfill_attempt(
+    conn: sqlite3.Connection, attempt_date: str, status: str, attempted_at: str | None = None
+) -> None:
+    """`attempted_at` defaults to the real current time, but callers that already
+    have a reference "now" (e.g. run.maybe_backfill) should pass it explicitly —
+    otherwise this row's timestamp silently drifts from whatever clock the
+    caller used to decide *whether* to attempt, which breaks time-based spacing
+    checks that compare against it."""
+    attempted_at = attempted_at or datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """INSERT INTO backfill_attempts (attempt_date, attempted_at, status)
+           VALUES (?, ?, ?)""",
+        (attempt_date, attempted_at, status),
+    )
+    conn.commit()
+
+
+def count_backfill_attempts(
+    conn: sqlite3.Connection, attempt_date: str, status: str
+) -> int:
+    row = conn.execute(
+        "SELECT COUNT(*) FROM backfill_attempts WHERE attempt_date = ? AND status = ?",
+        (attempt_date, status),
+    ).fetchone()
+    return row[0]
+
+
+def last_backfill_attempt_at(conn: sqlite3.Connection, status: str) -> str | None:
+    """Timestamp of the most recent attempt with the given status, across all
+    days — used to space out retries, independent of the per-day attempt count."""
+    row = conn.execute(
+        "SELECT MAX(attempted_at) FROM backfill_attempts WHERE status = ?",
+        (status,),
+    ).fetchone()
+    return row[0]
