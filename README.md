@@ -1,6 +1,6 @@
 # MetallicTrends
 
-[![Release](https://img.shields.io/github/v/release/abdullah85/metallictrends)](https://github.com/abdullah85/metallictrends/releases/tag/v0.1.0)
+[![Release](https://img.shields.io/github/v/release/abdullah85/metallictrends)](https://github.com/abdullah85/metallictrends/releases/tag/v0.2.0)
 
 Precious metals — gold, silver, platinum, and palladium — have shaped economies and driven markets for centuries. MetallicTrends is a platform for exploring how their prices evolve over time: what drives long-term trends, how different metals correlate, and what patterns emerge from years of daily market data. Currently, we use [metals.dev](https://metals.dev/) to build a resilient ingestion layer that collects historical prices for any date range you specify and stores them in a structured local database — the foundation on which analysis, visualisation, and APIs can be built.
 
