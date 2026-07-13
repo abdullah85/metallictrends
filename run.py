@@ -52,7 +52,9 @@ def needs_backfill(conn: sqlite3.Connection, today: date | None = None) -> bool:
     if last is None:
         return False
     today = today or date.today()
-    return date.fromisoformat(last) < today
+    timedelta = today - date.fromisoformat(last)
+    # Tolerate a gap of 1 day as we may not have the required data yet on metals.dev
+    return timedelta.days > 1 # Logic can be improved further
 
 
 def backfill_recent(conn: sqlite3.Connection, today: date | None = None) -> bool:
