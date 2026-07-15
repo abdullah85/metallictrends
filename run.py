@@ -16,7 +16,7 @@ from db import (
 
 logger = logging.getLogger(__name__)
 
-MAX_DAILY_BACKFILL_ATTEMPTS = 3
+MAX_DAILY_BACKFILL_ATTEMPTS = 1
 # Retries are spaced out evenly across a day given the cap above (24h / 3 = 8h),
 # so a burst of homepage traffic can't burn through the day's attempts in seconds.
 MIN_BACKFILL_RETRY_INTERVAL = timedelta(hours=24) / MAX_DAILY_BACKFILL_ATTEMPTS
@@ -70,7 +70,7 @@ def backfill_recent(conn: sqlite3.Connection, today: date | None = None) -> bool
     return run_backfill(conn, start.isoformat(), end.isoformat())
 
 
-def maybe_backfill(conn: sqlite3.Connection, now: datetime | None = None) -> None:
+def maybe_backfill(conn: sqlite3.Connection, now: datetime | None = None) -> bool:
     """Homepage entry point: backfills recent data when the DB has fallen behind.
     Two independent guards protect a downed metals.dev from every page load
     turning into a doomed API call: a hard cap of 3 failed attempts per day, and
@@ -78,11 +78,16 @@ def maybe_backfill(conn: sqlite3.Connection, now: datetime | None = None) -> Non
     — so retries land spread through the day rather than bursting the moment
     traffic arrives. Successful catch-up isn't throttled by either guard — a very
     stale DB may take several page loads (or days) to fully catch up, advancing
-    by up to 30 days each time."""
+    by up to 30 days each time.
+
+    Returns True iff a backfill attempt actually ran and wrote to the DB
+    (rows, and/or the backfill_attempts record) — i.e. iff the caller has
+    something new worth persisting. Every early return below is guard-only
+    and touches nothing, so False is safe to treat as "DB unchanged"."""
     now = now or datetime.now(timezone.utc)
     today = now.date()
     if not needs_backfill(conn, today):
-        return
+        return False
 
     today_str = today.isoformat()
     if count_backfill_attempts(conn, today_str, "failed") >= MAX_DAILY_BACKFILL_ATTEMPTS:
@@ -90,7 +95,7 @@ def maybe_backfill(conn: sqlite3.Connection, now: datetime | None = None) -> Non
             "Skipping homepage backfill for %s: already failed %d times today",
             today_str, MAX_DAILY_BACKFILL_ATTEMPTS,
         )
-        return
+        return False
 
     last_failed_at = last_backfill_attempt_at(conn, "failed")
     if last_failed_at is not None:
@@ -100,13 +105,14 @@ def maybe_backfill(conn: sqlite3.Connection, now: datetime | None = None) -> Non
                 "Skipping homepage backfill: last failed attempt was %s ago, "
                 "minimum %s between retries", elapsed, MIN_BACKFILL_RETRY_INTERVAL,
             )
-            return
+            return False
 
     if backfill_recent(conn, today):
         record_backfill_attempt(conn, today_str, "success", now.isoformat())
     else:
         logger.error("Homepage backfill attempt failed for %s", today_str)
         record_backfill_attempt(conn, today_str, "failed", now.isoformat())
+    return True
 
 
 def run_backfill(conn: sqlite3.Connection, start_date: str, end_date: str) -> bool:

@@ -124,9 +124,10 @@ def index(request: Request):
     committed to GitHub right after — that commit is what Render's next restart
     checks out, so no separate restore step is needed anywhere in this file."""
     with _connect() as conn:
-        maybe_backfill(conn)
+        backfilled = maybe_backfill(conn)
         context = _latest_meta(conn)
-    push_db_to_github()
+    if backfilled:
+        push_db_to_github()
     return templates.TemplateResponse(request, "index.html", context)
 
 

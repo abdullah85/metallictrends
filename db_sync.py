@@ -28,7 +28,7 @@ logger = logging.getLogger("db_sync")
 
 GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
 GITHUB_REPO = os.environ["GITHUB_REPO"]
-GITHUB_BRANCH = os.environ.get("GITHUB_BRANCH", "main")
+GITHUB_BRANCH = os.environ.get("GITHUB_BRANCH", "deploy")
 DB_PATH = os.environ.get("DB_PATH", "metals.db")
 
 API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{DB_PATH}"
