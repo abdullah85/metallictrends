@@ -1,14 +1,15 @@
 import sqlite3
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from run import maybe_backfill
+from db_sync import push_db_to_github
 
 GRAMS_PER_TROY_OZ = 31.1034768
 METALS = ("gold", "silver", "platinum", "palladium")
@@ -119,10 +120,13 @@ def index(request: Request):
     path; the mount still serves everything else (assets/, etc.). If the stored data
     has fallen behind today, catches up (capped at 1 month/1 request per load,
     with failed attempts capped at 3/day and spaced at least 8h apart) before
-    rendering so the page never serves data staler than it needs to."""
+    rendering so the page never serves data staler than it needs to. New rows are
+    committed to GitHub right after — that commit is what Render's next restart
+    checks out, so no separate restore step is needed anywhere in this file."""
     with _connect() as conn:
         maybe_backfill(conn)
         context = _latest_meta(conn)
+    push_db_to_github()
     return templates.TemplateResponse(request, "index.html", context)
 
 

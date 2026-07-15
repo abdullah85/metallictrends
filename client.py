@@ -1,9 +1,12 @@
+import logging
 import os
 import requests
 from datetime import date
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 _ENDPOINT = "https://api.metals.dev/v1/timeseries"
 _MAX_WINDOW_DAYS = 30
@@ -22,6 +25,7 @@ def fetch_timeseries(start_date: str, end_date: str) -> dict:
         raise ValueError(
             f"Window from {start_date} to {end_date} exceeds {_MAX_WINDOW_DAYS} days"
         )
+    logger.info("Fetching metal prices for %s to %s", start_date, end_date)
     response = requests.get(
         _ENDPOINT,
         headers={"Accept": "application/json"},
