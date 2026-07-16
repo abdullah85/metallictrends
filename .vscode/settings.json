@@ -1,0 +1,3 @@
+{
+  "python.defaultInterpreterPath": "~/.venv/fastapi-3.12.11-venv/bin/python"
+}

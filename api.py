@@ -1,4 +1,5 @@
 import sqlite3
+import uvicorn
 from datetime import date
 from pathlib import Path
 
@@ -221,3 +222,7 @@ def widget_payload(
 
 if Path("web").is_dir():
     app.mount("/", StaticFiles(directory="web", html=True), name="web")
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
