@@ -1,3 +1,4 @@
+import logging
 import sqlite3
 import uvicorn
 from datetime import date
@@ -11,6 +12,8 @@ from fastapi.templating import Jinja2Templates
 
 from run import maybe_backfill
 from db_sync import push_db_to_github
+
+logging.basicConfig(level=logging.INFO)
 
 GRAMS_PER_TROY_OZ = 31.1034768
 METALS = ("gold", "silver", "platinum", "palladium")
