@@ -3,8 +3,8 @@ import logging
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
 
-from client import fetch_timeseries
-from db import (
+from metallictrends.ingestion.client import fetch_timeseries
+from metallictrends.db import (
     init_db,
     save_metal_prices,
     save_fx_rates,

@@ -3,7 +3,7 @@ import pytest
 import requests
 from unittest.mock import Mock
 from datetime import date, timedelta
-from db import init_db
+from metallictrends.db import init_db
 
 from sample_data import SAMPLE_10_DAY_RATES
 

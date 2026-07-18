@@ -5,8 +5,8 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-import api
-from db import init_db
+import metallictrends.api.app as api
+from metallictrends.db import init_db
 
 
 @pytest.fixture
@@ -55,7 +55,7 @@ def test_homepage_triggers_backfill_when_data_is_stale(api_db, fake_fetch_timese
     stale_last_date = (date.today() - timedelta(days=5)).isoformat()
     _seed_gold_series(api_db, stale_last_date)
 
-    with patch("run.fetch_timeseries", side_effect=fake_fetch_timeseries) as mock_fetch:
+    with patch("metallictrends.ingestion.run.fetch_timeseries", side_effect=fake_fetch_timeseries) as mock_fetch:
         response = TestClient(api.app).get("/")
 
     assert response.status_code == 200
@@ -71,7 +71,7 @@ def test_homepage_skips_backfill_when_data_is_current(api_db, fake_fetch_timeser
     the '>' check must be strict, not '>='."""
     _seed_gold_series(api_db, date.today().isoformat())
 
-    with patch("run.fetch_timeseries", side_effect=fake_fetch_timeseries) as mock_fetch:
+    with patch("metallictrends.ingestion.run.fetch_timeseries", side_effect=fake_fetch_timeseries) as mock_fetch:
         response = TestClient(api.app).get("/")
 
     assert response.status_code == 200
@@ -85,7 +85,7 @@ def test_homepage_backfill_capped_at_1_request_when_very_stale(api_db, fake_fetc
     very_stale_last_date = (date.today() - timedelta(days=365)).isoformat()
     _seed_gold_series(api_db, very_stale_last_date)
 
-    with patch("run.fetch_timeseries", side_effect=fake_fetch_timeseries) as mock_fetch:
+    with patch("metallictrends.ingestion.run.fetch_timeseries", side_effect=fake_fetch_timeseries) as mock_fetch:
         response = TestClient(api.app).get("/")
 
     assert response.status_code == 200
@@ -102,7 +102,7 @@ def test_homepage_backfill_retries_once_per_burst_of_traffic(api_db):
     _seed_gold_series(api_db, stale_last_date)
 
     with patch(
-        "run.fetch_timeseries", side_effect=ConnectionError("metals.dev is down")
+        "metallictrends.ingestion.run.fetch_timeseries", side_effect=ConnectionError("metals.dev is down")
     ) as mock_fetch:
         for _ in range(5):
             response = TestClient(api.app).get("/")

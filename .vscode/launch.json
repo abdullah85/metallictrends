@@ -1,0 +1,30 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug Pytest (current file)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": ["${file}", "-v", "-s"],
+            "console": "integratedTerminal",
+            "justMyCode": false
+        },
+        {
+            "name": "Debug Pytest (specific test)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": ["${file}::${input:testName}", "-v", "-s"],
+            "console": "integratedTerminal",
+            "justMyCode": false
+        }
+    ],
+    "inputs": [
+        {
+            "id": "testName",
+            "type": "promptString",
+            "description": "Test function name"
+        }
+    ]
+}

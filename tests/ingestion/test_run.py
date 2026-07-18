@@ -2,7 +2,7 @@ import pytest
 import requests
 from datetime import date, datetime, timedelta, timezone
 from unittest.mock import patch, Mock
-from run import (
+from metallictrends.ingestion.run import (
     chunk_date_range,
     run_backfill,
     needs_backfill,
@@ -39,7 +39,7 @@ def test_chunk_date_range_covers_full_range():
 
 def test_backfill_marks_window_fetched_on_success(db_conn, mock_10_day_response):
     """run_backfill marks a window as 'fetched' after a successful API call."""
-    with patch("run.fetch_timeseries", return_value=mock_10_day_response.json()):
+    with patch("metallictrends.ingestion.run.fetch_timeseries", return_value=mock_10_day_response.json()):
         run_backfill(db_conn, "2023-01-01", "2023-01-10")
     row = db_conn.execute(
         "SELECT status FROM backfill_windows WHERE start_date = ?", ("2023-01-01",)
@@ -52,7 +52,7 @@ def test_backfill_marks_window_failed_on_http_error(db_conn):
     http_response = Mock()
     http_response.status_code = 500
     with patch(
-        "run.fetch_timeseries",
+        "metallictrends.ingestion.run.fetch_timeseries",
         side_effect=requests.exceptions.HTTPError(response=http_response),
     ):
         run_backfill(db_conn, "2023-01-01", "2023-01-10")
@@ -69,7 +69,7 @@ def test_backfill_skips_already_fetched_windows(db_conn, mock_10_day_response):
         ("2023-01-01", "2023-01-10", "fetched", "2024-01-01T00:00:00+00:00"),
     )
     db_conn.commit()
-    with patch("run.fetch_timeseries") as mock_fetch:
+    with patch("metallictrends.ingestion.run.fetch_timeseries") as mock_fetch:
         run_backfill(db_conn, "2023-01-01", "2023-01-10")
     mock_fetch.assert_not_called()
 
@@ -84,10 +84,11 @@ def _seed_gold_price(conn, on_date: str) -> None:
     conn.commit()
 
 
-def test_needs_backfill_true_when_last_date_before_today(db_conn):
-    """needs_backfill is True once the latest stored date has fallen behind today."""
+def test_needs_backfill_true_when_gap_exceeds_one_day(db_conn):
+    """needs_backfill is True once the latest stored date has fallen more than
+    1 day behind today."""
     _seed_gold_price(db_conn, "2023-01-01")
-    assert needs_backfill(db_conn, today=date(2023, 1, 2)) is True
+    assert needs_backfill(db_conn, today=date(2023, 1, 3)) is True
 
 
 def test_needs_backfill_false_when_last_date_is_today(db_conn):
@@ -95,6 +96,13 @@ def test_needs_backfill_false_when_last_date_is_today(db_conn):
     the '>' in "current date is higher than the last saved date" must be strict."""
     _seed_gold_price(db_conn, "2023-01-01")
     assert needs_backfill(db_conn, today=date(2023, 1, 1)) is False
+
+
+def test_needs_backfill_false_when_gap_is_exactly_one_day(db_conn):
+    """A 1-day gap is tolerated rather than triggering a backfill, since
+    metals.dev may not have the latest day's data ready yet."""
+    _seed_gold_price(db_conn, "2023-01-01")
+    assert needs_backfill(db_conn, today=date(2023, 1, 2)) is False
 
 
 def test_needs_backfill_false_on_empty_table(db_conn):
@@ -105,7 +113,7 @@ def test_needs_backfill_false_on_empty_table(db_conn):
 
 def test_needs_backfill_defaults_to_real_today(db_conn):
     """With no `today` argument, needs_backfill compares against the real current date."""
-    _seed_gold_price(db_conn, (date.today() - timedelta(days=1)).isoformat())
+    _seed_gold_price(db_conn, (date.today() - timedelta(days=2)).isoformat())
     assert needs_backfill(db_conn) is True
 
 
@@ -115,7 +123,7 @@ def test_backfill_recent_covers_gap_up_to_today_when_under_3_months(db_conn, fak
     """When the gap since the last stored date is 3 months or less, backfill_recent
     fetches exactly that gap: the day after the last date through today."""
     _seed_gold_price(db_conn, "2023-01-01")
-    with patch("run.fetch_timeseries", side_effect=fake_fetch_timeseries) as mock_fetch:
+    with patch("metallictrends.ingestion.run.fetch_timeseries", side_effect=fake_fetch_timeseries) as mock_fetch:
         backfill_recent(db_conn, today=date(2023, 1, 11))
     mock_fetch.assert_called_once_with("2023-01-02", "2023-01-11")
 
@@ -127,7 +135,7 @@ def test_backfill_recent_caps_at_1_month_in_1_request(db_conn, fake_fetch_timese
     a single homepage load bounded regardless of how stale the data is; catching
     up the rest of the gap happens on subsequent loads."""
     _seed_gold_price(db_conn, "2023-01-01")
-    with patch("run.fetch_timeseries", side_effect=fake_fetch_timeseries) as mock_fetch:
+    with patch("metallictrends.ingestion.run.fetch_timeseries", side_effect=fake_fetch_timeseries) as mock_fetch:
         backfill_recent(db_conn, today=date(2024, 1, 1))
     mock_fetch.assert_called_once_with("2023-01-02", "2023-02-01")
 
@@ -136,14 +144,14 @@ def test_backfill_recent_returns_true_on_success(db_conn, fake_fetch_timeseries)
     """backfill_recent reports success back to its caller (maybe_backfill relies
     on this to decide whether to log/record a failed attempt)."""
     _seed_gold_price(db_conn, "2023-01-01")
-    with patch("run.fetch_timeseries", side_effect=fake_fetch_timeseries):
+    with patch("metallictrends.ingestion.run.fetch_timeseries", side_effect=fake_fetch_timeseries):
         assert backfill_recent(db_conn, today=date(2023, 1, 11)) is True
 
 
 def test_backfill_recent_returns_false_on_failure(db_conn):
     """backfill_recent reports failure when the underlying fetch raises."""
     _seed_gold_price(db_conn, "2023-01-01")
-    with patch("run.fetch_timeseries", side_effect=requests.exceptions.ConnectionError()):
+    with patch("metallictrends.ingestion.run.fetch_timeseries", side_effect=requests.exceptions.ConnectionError()):
         assert backfill_recent(db_conn, today=date(2023, 1, 11)) is False
 
 
@@ -151,7 +159,7 @@ def test_backfill_recent_records_fetched_windows(db_conn, fake_fetch_timeseries)
     """After backfill_recent runs, the windows it covered are marked 'fetched',
     so a subsequent homepage load won't re-fetch them."""
     _seed_gold_price(db_conn, "2023-01-01")
-    with patch("run.fetch_timeseries", side_effect=fake_fetch_timeseries):
+    with patch("metallictrends.ingestion.run.fetch_timeseries", side_effect=fake_fetch_timeseries):
         backfill_recent(db_conn, today=date(2023, 1, 6))
     row = db_conn.execute(
         "SELECT status FROM backfill_windows WHERE start_date = ?", ("2023-01-02",)
@@ -164,10 +172,10 @@ def test_backfill_recent_records_fetched_windows(db_conn, fake_fetch_timeseries)
 def test_run_backfill_logs_a_warning_on_window_failure(db_conn, caplog):
     """A window fetch failure is logged, not silently swallowed."""
     with patch(
-        "run.fetch_timeseries",
+        "metallictrends.ingestion.run.fetch_timeseries",
         side_effect=requests.exceptions.ConnectionError("boom"),
     ):
-        with caplog.at_level("WARNING", logger="run"):
+        with caplog.at_level("WARNING", logger="metallictrends.ingestion.run"):
             run_backfill(db_conn, "2023-01-01", "2023-01-10")
     assert any("2023-01-01" in message for message in caplog.messages)
 
@@ -183,7 +191,7 @@ def test_run_backfill_returns_false_when_any_window_fails(db_conn, fake_fetch_ti
             raise result
         return result
 
-    with patch("run.fetch_timeseries", side_effect=_flaky):
+    with patch("metallictrends.ingestion.run.fetch_timeseries", side_effect=_flaky):
         assert run_backfill(db_conn, "2023-01-01", "2023-03-01") is False
 
 
@@ -203,7 +211,7 @@ def _record_failed_attempt_at(conn, attempt_date: str, attempted_at: str) -> Non
 def test_maybe_backfill_does_nothing_when_up_to_date(db_conn, fake_fetch_timeseries):
     """maybe_backfill makes no request when the DB is already caught up to today."""
     _seed_gold_price(db_conn, "2023-01-01")
-    with patch("run.fetch_timeseries", side_effect=fake_fetch_timeseries) as mock_fetch:
+    with patch("metallictrends.ingestion.run.fetch_timeseries", side_effect=fake_fetch_timeseries) as mock_fetch:
         maybe_backfill(db_conn, now=datetime(2023, 1, 1, tzinfo=timezone.utc))
     mock_fetch.assert_not_called()
 
@@ -211,7 +219,7 @@ def test_maybe_backfill_does_nothing_when_up_to_date(db_conn, fake_fetch_timeser
 def test_maybe_backfill_records_success(db_conn, fake_fetch_timeseries):
     """A successful catch-up records a 'success' attempt for today."""
     _seed_gold_price(db_conn, "2023-01-01")
-    with patch("run.fetch_timeseries", side_effect=fake_fetch_timeseries):
+    with patch("metallictrends.ingestion.run.fetch_timeseries", side_effect=fake_fetch_timeseries):
         maybe_backfill(db_conn, now=datetime(2023, 1, 11, tzinfo=timezone.utc))
     row = db_conn.execute(
         "SELECT status FROM backfill_attempts WHERE attempt_date = ?", ("2023-01-11",)
@@ -222,8 +230,8 @@ def test_maybe_backfill_records_success(db_conn, fake_fetch_timeseries):
 def test_maybe_backfill_logs_and_records_failure(db_conn, caplog):
     """A failed catch-up attempt is logged and recorded as 'failed' for today."""
     _seed_gold_price(db_conn, "2023-01-01")
-    with patch("run.fetch_timeseries", side_effect=requests.exceptions.ConnectionError("boom")):
-        with caplog.at_level("ERROR", logger="run"):
+    with patch("metallictrends.ingestion.run.fetch_timeseries", side_effect=requests.exceptions.ConnectionError("boom")):
+        with caplog.at_level("ERROR", logger="metallictrends.ingestion.run"):
             maybe_backfill(db_conn, now=datetime(2023, 1, 11, tzinfo=timezone.utc))
     row = db_conn.execute(
         "SELECT status FROM backfill_attempts WHERE attempt_date = ?", ("2023-01-11",)
@@ -238,7 +246,7 @@ def test_maybe_backfill_skips_retry_within_spacing_interval(db_conn, fake_fetch_
     this is what spreads retries through the day instead of bursting them."""
     _seed_gold_price(db_conn, "2023-01-01")
     _record_failed_attempt_at(db_conn, "2023-01-11", "2023-01-11T06:00:00+00:00")
-    with patch("run.fetch_timeseries", side_effect=fake_fetch_timeseries) as mock_fetch:
+    with patch("metallictrends.ingestion.run.fetch_timeseries", side_effect=fake_fetch_timeseries) as mock_fetch:
         maybe_backfill(db_conn, now=datetime(2023, 1, 11, 10, 0, tzinfo=timezone.utc))
     mock_fetch.assert_not_called()
 
@@ -248,7 +256,7 @@ def test_maybe_backfill_retries_once_spacing_interval_has_elapsed(db_conn, fake_
     failure, a retry is allowed again."""
     _seed_gold_price(db_conn, "2023-01-01")
     _record_failed_attempt_at(db_conn, "2023-01-11", "2023-01-11T06:00:00+00:00")
-    with patch("run.fetch_timeseries", side_effect=fake_fetch_timeseries) as mock_fetch:
+    with patch("metallictrends.ingestion.run.fetch_timeseries", side_effect=fake_fetch_timeseries) as mock_fetch:
         maybe_backfill(
             db_conn,
             now=datetime(2023, 1, 11, 6, 0, tzinfo=timezone.utc) + MIN_BACKFILL_RETRY_INTERVAL,
@@ -264,7 +272,7 @@ def test_maybe_backfill_day_cap_applies_even_after_spacing_interval_elapses(db_c
     _seed_gold_price(db_conn, "2023-01-01")
     for hour in (0, 1, 2):
         _record_failed_attempt_at(db_conn, "2023-01-11", f"2023-01-11T{hour:02d}:00:00+00:00")
-    with patch("run.fetch_timeseries", side_effect=fake_fetch_timeseries) as mock_fetch:
+    with patch("metallictrends.ingestion.run.fetch_timeseries", side_effect=fake_fetch_timeseries) as mock_fetch:
         maybe_backfill(db_conn, now=datetime(2023, 1, 11, 20, 0, tzinfo=timezone.utc))
     mock_fetch.assert_not_called()
 
@@ -274,7 +282,7 @@ def test_maybe_backfill_retries_on_a_new_day_once_spacing_allows(db_conn, fake_f
     calendar day has started and the spacing interval has elapsed, it retries."""
     _seed_gold_price(db_conn, "2023-01-01")
     with patch(
-        "run.fetch_timeseries", side_effect=requests.exceptions.ConnectionError("boom")
+        "metallictrends.ingestion.run.fetch_timeseries", side_effect=requests.exceptions.ConnectionError("boom")
     ) as mock_fetch:
         maybe_backfill(db_conn, now=datetime(2023, 1, 11, 0, 0, tzinfo=timezone.utc))
         maybe_backfill(db_conn, now=datetime(2023, 1, 11, 4, 0, tzinfo=timezone.utc))

@@ -1,5 +1,5 @@
 """
-db_sync.py
+metallictrends.sync.github
 
 Keeps metals.db durable across Render's free-tier restarts by committing it
 straight to GitHub whenever new rows are fetched.
@@ -24,7 +24,7 @@ import logging
 
 import requests
 
-logger = logging.getLogger("db_sync")
+logger = logging.getLogger(__name__)
 
 GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
 GITHUB_REPO = os.environ["GITHUB_REPO"]

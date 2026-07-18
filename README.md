@@ -61,7 +61,7 @@ MetallicTrends retrieves daily price data for any date range you specify using t
 Fetches daily prices for your specified date range and saves results to `metals.db`:
 
 ```bash
-python run.py --start-date 2021-01-01 --end-date 2026-01-01
+metallictrends-backfill --start-date 2021-01-01 --end-date 2026-01-01
 ```
 
 The script is safe to re-run. Completed windows are skipped; failed windows are retried.
@@ -71,7 +71,7 @@ The script is safe to re-run. Completed windows are skipped; failed windows are 
 Copies `metals.db` to a timestamped file and exports price records to CSV:
 
 ```bash
-python backup.py
+metallictrends-backup
 ```
 
 Output is written to the `data/` directory, which is excluded from version control.
@@ -88,19 +88,29 @@ No API key required. All HTTP calls are intercepted by `unittest.mock`.
 
 ```
 metallictrends/
-├── client.py              # Calls the metals.dev timeseries endpoint for a given date window
-├── db.py                  # SQLite schema, record insertion, and window status updates
-├── run.py                 # Backfill orchestrator — the main script to run
-├── backup.py              # Timestamped database backup and CSV export
-├── tests/
-│   ├── conftest.py        # Shared pytest fixtures available to all test files automatically
-│   ├── test_client.py     # Tests for fetch_timeseries in client.py
-│   ├── test_db.py         # Tests for save_metal_prices, save_fx_rates, update_window_status in db.py
-│   └── test_run.py        # Tests for window chunking, state transitions, and failure handling in run.py
-├── data/                  # Git-ignored — stores .db backups and CSV exports
-├── media/                 # Screenshots documenting the backfill session
-├── .env.example           # API key template
-└── pyproject.toml         # Project metadata and dependencies
+├── src/metallictrends/
+│   ├── db.py                   # SQLite schema, record insertion, and window status updates
+│   ├── ingestion/
+│   │   ├── client.py           # Calls the metals.dev timeseries endpoint for a given date window
+│   │   ├── run.py              # Backfill orchestrator — entry point: metallictrends-backfill
+│   │   └── backup.py           # Timestamped database backup and CSV export — entry point: metallictrends-backup
+│   ├── sync/
+│   │   └── github.py           # Commits metals.db to GitHub so it survives Render's ephemeral disk
+│   └── api/
+│       └── app.py              # FastAPI app: landing page + /api/* routes — served as metallictrends.api.app:app
+├── web/                        # Static landing page (HTML/CSS/JS), served by api/app.py's StaticFiles mount
+├── tests/                      # Mirrors src/metallictrends/'s layout
+│   ├── conftest.py             # Shared pytest fixtures available to all test files automatically
+│   ├── test_db.py
+│   ├── ingestion/
+│   │   ├── test_client.py
+│   │   └── test_run.py
+│   └── api/
+│       └── test_app.py
+├── data/                       # Git-ignored — stores .db backups and CSV exports
+├── media/                      # Screenshots documenting the backfill session
+├── .env.example                # API key template
+└── pyproject.toml              # Project metadata, dependencies, and CLI entry points
 ```
 
 ## Data Storage

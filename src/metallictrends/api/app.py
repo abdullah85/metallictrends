@@ -10,8 +10,8 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from run import maybe_backfill
-from db_sync import push_db_to_github
+from metallictrends.ingestion.run import maybe_backfill
+from metallictrends.sync.github import push_db_to_github
 
 logging.basicConfig(level=logging.INFO)
 
