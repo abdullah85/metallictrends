@@ -46,12 +46,7 @@ p { max-width: 62ch; }
 /* Masthead */
 .masthead .wrap { display: flex; align-items: center; justify-content: space-between; padding: 22px 32px; }
 .wordmark { display: flex; align-items: center; gap: 12px; }
-.wordmark .mark {
-  width: 34px; height: 34px; border-radius: 50%; flex: none;
-  background: linear-gradient(155deg, #e7c383 0%, #a97c34 35%, #6e4d1e 60%, #cf9f52 100%);
-  display: flex; align-items: center; justify-content: center;
-  font-family: var(--font-mono); font-size: 10px; font-weight: 700; color: #241a0c; letter-spacing: -0.02em;
-}
+.wordmark .mark { width: 34px; height: 34px; flex: none; display: block; }
 .wordmark .name { font-family: var(--font-display); font-size: 19px; letter-spacing: 0.01em; }
 nav.top-links { display: flex; gap: 28px; font-size: 13px; letter-spacing: 0.03em; }
 nav.top-links a { text-decoration: none; color: var(--ink-soft); }
