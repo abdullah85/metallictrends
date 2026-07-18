@@ -346,19 +346,27 @@ function pctChange(arr, i, j) {
   return Math.round((arr[i] - arr[j]) / arr[j] * 10000) / 100;
 }
 
+async function fetchJson(url) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`${url} returned ${response.status} ${response.statusText}`);
+  }
+  return response.json();
+}
+
 async function loadLiveData() {
   const metals = Object.keys(METAL_META);
   const metalsData = {};
 
   // Full daily USD→INR history in one uncapped call — each metal's series is then
   // converted using the actual rate for that specific day, not one rate applied throughout.
-  const fxRows = await (await fetch(`/api/fx/inr?start=2000-01-01`)).json();
+  const fxRows = await fetchJson(`/api/fx/inr?start=2000-01-01`);
   const fxByDate = new Map(fxRows.map(r => [r.date, r.rate_to_usd]));
 
   // Fetch each metal's entire available history once (uncapped via start=) so every
   // range preset and the custom picker can slice locally with no further round-trips.
   for (const m of metals) {
-    const usdRows = await (await fetch(`/api/prices/${m}?start=2000-01-01`)).json();
+    const usdRows = await fetchJson(`/api/prices/${m}?start=2000-01-01`);
     const dates = usdRows.map(r => r.date);
     const prices = usdRows.map(r => r.price_usd);
     const n = prices.length;

@@ -109,3 +109,48 @@ def test_homepage_backfill_retries_once_per_burst_of_traffic(api_db):
             assert response.status_code == 200
 
     assert mock_fetch.call_count == 1
+
+
+# --- _require_same_origin ---
+
+def test_same_origin_endpoint_allowed_with_sec_fetch_site_same_origin(api_db):
+    """Sec-Fetch-Site: same-origin is the primary signal and is allowed through."""
+    response = TestClient(api.app).get(
+        "/api/prices/gold", headers={"sec-fetch-site": "same-origin"}
+    )
+    assert response.status_code == 200
+
+
+def test_same_origin_endpoint_blocked_when_sec_fetch_site_is_cross_site(api_db):
+    """An explicit cross-site value is rejected even if a same-origin-looking
+    Referer is also present — Sec-Fetch-Site, when present, is authoritative."""
+    response = TestClient(api.app).get(
+        "/api/prices/gold",
+        headers={"sec-fetch-site": "cross-site", "referer": "http://testserver/"},
+    )
+    assert response.status_code == 403
+
+
+def test_same_origin_endpoint_allowed_via_referer_when_sec_fetch_site_missing(api_db):
+    """Some browsers/proxies never send Fetch Metadata headers at all. When
+    Sec-Fetch-Site is simply absent (not "cross-site"), a same-origin Referer
+    is accepted as a fallback so those clients aren't blocked outright."""
+    response = TestClient(api.app).get(
+        "/api/prices/gold", headers={"referer": "http://testserver/"}
+    )
+    assert response.status_code == 200
+
+
+def test_same_origin_endpoint_blocked_when_no_signal_at_all(api_db):
+    """With neither Sec-Fetch-Site nor a same-origin Referer, the request is
+    indistinguishable from a third party (e.g. curl) hitting the API directly."""
+    response = TestClient(api.app).get("/api/prices/gold")
+    assert response.status_code == 403
+
+
+def test_same_origin_endpoint_blocked_when_referer_is_cross_origin(api_db):
+    """A Referer pointing at a different origin doesn't satisfy the fallback."""
+    response = TestClient(api.app).get(
+        "/api/prices/gold", headers={"referer": "http://evil.example/"}
+    )
+    assert response.status_code == 403

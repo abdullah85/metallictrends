@@ -3,6 +3,7 @@ import sqlite3
 import uvicorn
 from datetime import date
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -37,9 +38,22 @@ def _connect() -> sqlite3.Connection:
 def _require_same_origin(request: Request) -> None:
     """Blocks calls that don't carry browser fetch-metadata proving they came from
     our own page — keeps /api/metals and /api/prices for the site's own UI only.
-    Doesn't apply to /api/widget, which is meant to be embedded on other sites."""
-    if request.headers.get("sec-fetch-site") not in ("same-origin", "same-site"):
-        raise HTTPException(403, "This endpoint is only accessible from the MetallicTrends site.")
+    Doesn't apply to /api/widget, which is meant to be embedded on other sites.
+
+    Sec-Fetch-Site is the primary signal, but not every browser/proxy sends
+    fetch-metadata headers (older Safari, privacy-hardened browsers, some
+    reverse proxies) — when it's simply absent, fall back to Referer, which
+    every browser attaches to a same-page fetch() unless referrers are
+    disabled entirely. A missing-but-genuinely-same-origin request should not
+    be treated the same as a cross-site one."""
+    sec_fetch_site = request.headers.get("sec-fetch-site")
+    if sec_fetch_site in ("same-origin", "same-site"):
+        return
+    if sec_fetch_site is None:
+        referer = request.headers.get("referer")
+        if referer and urlparse(referer).netloc == request.url.netloc:
+            return
+    raise HTTPException(403, "This endpoint is only accessible from the MetallicTrends site.")
 
 
 def _validate_metal(metal: str) -> str:
