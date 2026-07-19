@@ -10,6 +10,10 @@ MetallicTrends retrieves daily price data for any date range you specify using t
 
 ## Releases
 
+**[v0.3.0](https://github.com/abdullah85/metallictrends/releases/tag/v0.3.0)** — Restructured into a `src/` package layout, fixed a recurring metals.dev backfill crash, added structured observability for backfill and GitHub sync attempts, and reworked the landing page's wordmark and B2B section.
+
+**[v0.2.0](https://github.com/abdullah85/metallictrends/releases/tag/v0.2.0)** — Landing page rebuilt around a single interactive, multi-range price chart, served directly from FastAPI with server-rendered live data.
+
 **[v0.1.0](https://github.com/abdullah85/metallictrends/releases/tag/v0.1.0)** — Initial release: the resumable metals.dev ingestion pipeline, SQLite storage, and backup/export tooling described below.
 
 ## Technical Highlights
