@@ -1,18 +1,34 @@
+import base64
+import hashlib
+import hmac
 import logging
+import os
+import re
+import secrets
 import sqlite3
+import time
 import uvicorn
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 
-from metallictrends.db import init_db
+from metallictrends.db import (
+    count_recent_login_codes,
+    create_login_code,
+    get_active_login_code,
+    increment_login_code_attempts,
+    init_db,
+    mark_login_code_used,
+)
 from metallictrends.ingestion.run import maybe_backfill
+from metallictrends.notify.email import send_otp_email
 from metallictrends.sync.github import push_db_to_github
 
 logging.basicConfig(level=logging.INFO)
@@ -21,11 +37,19 @@ GRAMS_PER_TROY_OZ = 31.1034768
 METALS = ("gold", "silver", "platinum", "palladium")
 DB_PATH = "metals.db"
 
+_SESSION_COOKIE = "mt_admin_session"
+_SESSION_TTL_SECONDS = 15 * 60
+_CODE_TTL_SECONDS = 10 * 60
+_MAX_CODE_ATTEMPTS = 5
+_MAX_CODE_REQUESTS_PER_EMAIL_PER_HOUR = 7
+_MAX_CODE_REQUESTS_PER_IP_PER_HOUR = 5
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
 app = FastAPI(title="MetallicTrends API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST"],
 )
 templates = Jinja2Templates(directory="web")
 
@@ -62,6 +86,51 @@ def _require_same_origin(request: Request) -> None:
         if referer and urlparse(referer).netloc == request.url.netloc:
             return
     raise HTTPException(403, "This endpoint is only accessible from the MetallicTrends site.")
+
+
+def _sign_session(email: str, secret: str, ttl_seconds: int) -> str:
+    """A stateless, tamper-evident session token: email + expiry + an HMAC
+    signature over both, base64-encoded. No server-side session store needed —
+    verifying is just re-computing the signature and comparing."""
+    exp = int(time.time()) + ttl_seconds
+    payload = f"{email}|{exp}"
+    sig = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    return base64.urlsafe_b64encode(f"{payload}|{sig}".encode()).decode()
+
+
+def _verify_session(token: str, secret: str) -> str | None:
+    try:
+        email, exp_str, sig = base64.urlsafe_b64decode(token.encode()).decode().split("|", 2)
+    except Exception:
+        return None
+    expected_sig = hmac.new(secret.encode(), f"{email}|{exp_str}".encode(), hashlib.sha256).hexdigest()
+    if not secrets.compare_digest(sig, expected_sig):
+        return None
+    if int(exp_str) < int(time.time()):
+        return None
+    return email
+
+
+def _current_admin_email(request: Request) -> str | None:
+    """None if there's no valid session — used where the caller wants to
+    branch on auth state (e.g. show a login form vs. the dashboard) rather
+    than hard-fail."""
+    secret = os.environ.get("ADMIN_SESSION_SECRET")
+    token = request.cookies.get(_SESSION_COOKIE)
+    if not secret or not token:
+        return None
+    return _verify_session(token, secret)
+
+
+def _require_admin_session(request: Request) -> str:
+    """Gates JSON /admin/* API routes: 501 if the server has no session
+    secret configured, 401 if there's no valid session cookie."""
+    if not os.environ.get("ADMIN_SESSION_SECRET"):
+        raise HTTPException(501, "Admin auth is not configured on this server.")
+    email = _current_admin_email(request)
+    if email is None:
+        raise HTTPException(401, "Not authenticated.")
+    return email
 
 
 def _validate_metal(metal: str) -> str:
@@ -243,6 +312,103 @@ def widget_payload(
             "chg_1d_pct": snapshot["chg_1d_pct"],
             "trend": [{"date": r["date"], "price": p} for r, p in zip(rows, prices)],
         }
+
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_home(request: Request):
+    """Always 200s — the page itself decides what to show. With no valid
+    session it renders the email/code login form; with one, the (placeholder)
+    dashboard. This is deliberately not behind a Depends() that raises, since
+    an anonymous visitor is meant to see a real login page, not an error."""
+    email = _current_admin_email(request)
+    return templates.TemplateResponse(request, "admin.html", {"email": email})
+
+
+class _RequestCodeBody(BaseModel):
+    email: str
+
+
+class _VerifyCodeBody(BaseModel):
+    email: str
+    code: str
+
+
+@app.post("/admin/auth/request-code")
+def admin_request_code(body: _RequestCodeBody, request: Request):
+    """Emails a 6-digit one-time code to any address the visitor supplies —
+    intentionally open (not restricted to a fixed operator address) so
+    recruiters/reviewers can self-serve access. The email itself is the
+    access control: only someone who can read that inbox gets in. Every
+    request is logged (email + IP) in admin_login_codes regardless of
+    outcome, and rate-limited per email and per IP so this can't be turned
+    into an open mechanism for spamming arbitrary addresses."""
+    email = body.email.strip().lower()
+    if not _EMAIL_RE.match(email):
+        raise HTTPException(400, "Enter a valid email address.")
+
+    ip = request.client.host if request.client else None
+    now = datetime.now(timezone.utc)
+    since = (now - timedelta(hours=1)).isoformat()
+
+    with _connect() as conn:
+        if count_recent_login_codes(conn, email=email, since=since) >= _MAX_CODE_REQUESTS_PER_EMAIL_PER_HOUR:
+            raise HTTPException(429, "Too many code requests for this email. Try again later.")
+        if ip and count_recent_login_codes(conn, ip=ip, since=since) >= _MAX_CODE_REQUESTS_PER_IP_PER_HOUR:
+            raise HTTPException(429, "Too many code requests from this network. Try again later.")
+
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        code_hash = hashlib.sha256(code.encode()).hexdigest()
+        expires_at = (now + timedelta(seconds=_CODE_TTL_SECONDS)).isoformat()
+        create_login_code(conn, email, code_hash, now.isoformat(), expires_at, ip)
+
+    send_otp_email(email, code)
+    return {"status": "sent"}
+
+
+@app.post("/admin/auth/verify-code")
+def admin_verify_code(body: _VerifyCodeBody, response: Response):
+    """Verifies a code and, on success, sets the signed session cookie.
+    Attempts are capped per code (not just per request) so a leaked or
+    guessed-at code can't be brute-forced indefinitely — 5 wrong guesses
+    invalidates it and a fresh code (subject to the request-code rate
+    limits above) is required."""
+    secret = os.environ.get("ADMIN_SESSION_SECRET")
+    if not secret:
+        raise HTTPException(501, "Admin auth is not configured on this server.")
+
+    email = body.email.strip().lower()
+    code = body.code.strip()
+    now = datetime.now(timezone.utc).isoformat()
+
+    with _connect() as conn:
+        row = get_active_login_code(conn, email, now)
+        if row is None:
+            raise HTTPException(401, "Invalid or expired code.")
+        row_id, _email, code_hash, _created_at, _expires_at, _used_at, attempts, _ip = row
+        if attempts >= _MAX_CODE_ATTEMPTS:
+            mark_login_code_used(conn, row_id, now)
+            raise HTTPException(401, "Too many incorrect attempts. Request a new code.")
+
+        submitted_hash = hashlib.sha256(code.encode()).hexdigest()
+        if not secrets.compare_digest(submitted_hash, code_hash):
+            if increment_login_code_attempts(conn, row_id) >= _MAX_CODE_ATTEMPTS:
+                mark_login_code_used(conn, row_id, now)
+            raise HTTPException(401, "Invalid or expired code.")
+
+        mark_login_code_used(conn, row_id, now)
+
+    token = _sign_session(email, secret, _SESSION_TTL_SECONDS)
+    response.set_cookie(
+        _SESSION_COOKIE, token, max_age=_SESSION_TTL_SECONDS,
+        httponly=True, samesite="strict",
+    )
+    return {"status": "ok"}
+
+
+@app.post("/admin/auth/logout")
+def admin_logout(response: Response):
+    response.delete_cookie(_SESSION_COOKIE)
+    return {"status": "ok"}
 
 
 if Path("web").is_dir():

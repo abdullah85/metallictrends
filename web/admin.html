@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MetallicTrends — Admin</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" type="image/png" href="assets/favicon.png">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<div class="page">
+  <header class="masthead">
+    <div class="wrap">
+      <div class="wordmark">
+        <a class="wordmark-link" href="/" aria-label="MetallicTrends — home">
+          <svg class="wordmark-svg" viewBox="0 0 306 34" aria-hidden="true" focusable="false">
+            <defs>
+              <linearGradient id="wordmark-ingot" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stop-color="#c4923f"/>
+                <stop offset="45%" stop-color="#f0d29b"/>
+                <stop offset="100%" stop-color="#8c6a2e"/>
+              </linearGradient>
+            </defs>
+            <text x="0" y="25" font-family="'Stamp Display', 'URW Bookman', Cambria, Georgia, serif" font-weight="700" font-size="25" letter-spacing="0.01em" fill="url(#wordmark-ingot)">MT MetallicTrends</text>
+          </svg>
+        </a>
+        <a class="admin-link" href="/">← Back to site</a>
+      </div>
+    </div>
+  </header>
+
+  <section class="section">
+    <div class="wrap admin-wrap">
+      {% if email %}
+        <h1>Admin Dashboard</h1>
+        <p class="lede">Signed in as {{ email }}.</p>
+        <p class="lede">Coming soon — backfill attempt history and GitHub sync status, pulled straight from the DB.</p>
+        <button id="logout-button" type="button" class="btn btn-ghost" style="margin-top:18px">Log out</button>
+      {% else %}
+        <h1>Admin Login</h1>
+        <p class="lede">Enter your email and we'll send a one-time code to it. Your email address is logged for access tracking.</p>
+
+        <form id="request-form" class="admin-auth-form">
+          <input type="email" id="email-input" class="field-input" placeholder="you@example.com" autocomplete="email" required>
+          <button type="submit" class="btn btn-primary">Send code</button>
+        </form>
+
+        <form id="verify-form" class="admin-auth-form" hidden>
+          <input type="text" id="code-input" class="field-input" placeholder="6-digit code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required>
+          <button type="submit" class="btn btn-primary">Verify</button>
+        </form>
+
+        <p id="auth-message" class="admin-auth-message" role="status"></p>
+      {% endif %}
+    </div>
+  </section>
+</div>
+
+<script>
+(function () {
+  const logoutButton = document.getElementById("logout-button");
+  if (logoutButton) {
+    logoutButton.addEventListener("click", async () => {
+      await fetch("/admin/auth/logout", { method: "POST" });
+      window.location.reload();
+    });
+  }
+
+  const requestForm = document.getElementById("request-form");
+  const verifyForm = document.getElementById("verify-form");
+  const emailInput = document.getElementById("email-input");
+  const codeInput = document.getElementById("code-input");
+  const message = document.getElementById("auth-message");
+  if (!requestForm) return;
+
+  let submittedEmail = "";
+
+  requestForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    submittedEmail = emailInput.value.trim();
+    message.textContent = "Sending code…";
+    try {
+      const res = await fetch("/admin/auth/request-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: submittedEmail }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        message.textContent = data.detail || "Could not send code.";
+        return;
+      }
+      message.textContent = "Code sent — check your inbox.";
+      requestForm.hidden = true;
+      verifyForm.hidden = false;
+      codeInput.focus();
+    } catch (err) {
+      message.textContent = "Network error — try again.";
+    }
+  });
+
+  verifyForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    message.textContent = "Verifying…";
+    try {
+      const res = await fetch("/admin/auth/verify-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: submittedEmail, code: codeInput.value.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        message.textContent = data.detail || "Invalid code.";
+        return;
+      }
+      window.location.reload();
+    } catch (err) {
+      message.textContent = "Network error — try again.";
+    }
+  });
+})();
+</script>
+
+</body>
+</html>

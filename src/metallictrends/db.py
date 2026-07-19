@@ -34,6 +34,15 @@ def init_db(conn: sqlite3.Connection) -> None:
             status       TEXT NOT NULL CHECK(status IN ('success', 'failed')),
             error_detail TEXT
         );
+        CREATE TABLE IF NOT EXISTS admin_login_codes (
+            email      TEXT NOT NULL,
+            code_hash  TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            used_at    TEXT,
+            attempts   INTEGER NOT NULL DEFAULT 0,
+            ip         TEXT
+        );
     """)
     # CREATE TABLE IF NOT EXISTS is a no-op against a DB that already has
     # backfill_attempts without this column (e.g. the live deployed DB) — this
@@ -128,5 +137,74 @@ def record_github_sync(
         """INSERT INTO github_sync_log (attempted_at, status, error_detail)
            VALUES (?, ?, ?)""",
         (attempted_at, status, error_detail),
+    )
+    conn.commit()
+
+
+def create_login_code(
+    conn: sqlite3.Connection, email: str, code_hash: str, created_at: str,
+    expires_at: str, ip: str | None = None,
+) -> int:
+    """Stores a hashed one-time login code. Also doubles as the access log —
+    every request, successful or not, leaves a row here with the requesting
+    email and IP."""
+    cur = conn.execute(
+        """INSERT INTO admin_login_codes (email, code_hash, created_at, expires_at, ip)
+           VALUES (?, ?, ?, ?, ?)""",
+        (email, code_hash, created_at, expires_at, ip),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def count_recent_login_codes(
+    conn: sqlite3.Connection, *, email: str | None = None, ip: str | None = None, since: str,
+) -> int:
+    """Counts codes requested at or after `since`, filtered by email and/or IP —
+    the basis for rate-limiting how often a given email or network can request
+    a new code."""
+    query = "SELECT COUNT(*) FROM admin_login_codes WHERE created_at >= ?"
+    params: list[str] = [since]
+    if email is not None:
+        query += " AND email = ?"
+        params.append(email)
+    if ip is not None:
+        query += " AND ip = ?"
+        params.append(ip)
+    return conn.execute(query, params).fetchone()[0]
+
+
+def get_active_login_code(conn: sqlite3.Connection, email: str, now: str):
+    """The most recent unused, unexpired code for this email, if any. Columns
+    are returned in a fixed positional order (not by name) since callers may
+    or may not have sqlite3.Row set as the connection's row_factory."""
+    return conn.execute(
+        """SELECT rowid, email, code_hash, created_at, expires_at, used_at, attempts, ip
+           FROM admin_login_codes
+           WHERE email = ? AND used_at IS NULL AND expires_at > ?
+           ORDER BY created_at DESC LIMIT 1""",
+        (email, now),
+    ).fetchone()
+
+
+def increment_login_code_attempts(conn: sqlite3.Connection, row_id: int) -> int:
+    """Records one more failed verification attempt against a code and returns
+    the new attempt count, so the caller can invalidate it once a cap is hit —
+    bounding how many guesses a brute-force attempt gets against a single
+    emailed code."""
+    conn.execute(
+        "UPDATE admin_login_codes SET attempts = attempts + 1 WHERE rowid = ?", (row_id,)
+    )
+    conn.commit()
+    return conn.execute(
+        "SELECT attempts FROM admin_login_codes WHERE rowid = ?", (row_id,)
+    ).fetchone()[0]
+
+
+def mark_login_code_used(conn: sqlite3.Connection, row_id: int, used_at: str) -> None:
+    """Closes out a code so it can't be verified again — on a successful login,
+    or to shut down further guesses once the attempt cap is hit."""
+    conn.execute(
+        "UPDATE admin_login_codes SET used_at = ? WHERE rowid = ?", (used_at, row_id)
     )
     conn.commit()

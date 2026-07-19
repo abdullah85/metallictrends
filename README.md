@@ -113,7 +113,7 @@ metallictrends/
 │       └── test_app.py
 ├── data/                       # Git-ignored — stores .db backups and CSV exports
 ├── media/                      # Screenshots documenting the backfill session
-├── .env.example                # API key template
+├── .env.example                # API key and admin credentials template
 └── pyproject.toml              # Project metadata, dependencies, and CLI entry points
 ```
 

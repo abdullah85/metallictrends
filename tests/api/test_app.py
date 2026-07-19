@@ -157,3 +157,162 @@ def test_same_origin_endpoint_blocked_when_referer_is_cross_origin(api_db):
         "/api/prices/gold", headers={"referer": "http://evil.example/"}
     )
     assert response.status_code == 403
+
+
+# --- /admin auth: email one-time-code login ---
+
+def test_admin_page_shows_login_form_when_not_authenticated(api_db):
+    """With no session cookie, GET /admin renders the email/code login form,
+    not the dashboard — a real 200 page, not an error, since anyone should be
+    able to reach the login screen itself."""
+    response = TestClient(api.app).get("/admin")
+    assert response.status_code == 200
+    assert "Admin Login" in response.text
+    assert "Admin Dashboard" not in response.text
+
+
+def test_admin_auth_post_endpoints_allowed_by_cors_preflight(api_db):
+    """A cross-origin CORS preflight for POST to the admin auth endpoints must
+    be allowed — the CORS middleware was originally GET-only for the
+    read-only /api/* endpoints and needs POST too now that these exist, or a
+    browser that treats /admin as a different origin (e.g. 127.0.0.1 vs
+    localhost) gets its preflight rejected before the real request ever
+    fires."""
+    response = TestClient(api.app).options(
+        "/admin/auth/request-code",
+        headers={"Origin": "http://example.com", "Access-Control-Request-Method": "POST"},
+    )
+    assert response.status_code == 200
+    assert "POST" in response.headers["access-control-allow-methods"]
+
+
+def test_request_code_rejects_invalid_email(api_db):
+    response = TestClient(api.app).post("/admin/auth/request-code", json={"email": "not-an-email"})
+    assert response.status_code == 400
+
+
+def test_request_code_sends_email_and_logs_the_request(api_db):
+    """A valid email gets a code sent to it, and the request is logged in
+    admin_login_codes (email + IP) regardless of whether it's ever verified —
+    that log is the access-tracking mechanism."""
+    with patch("metallictrends.api.app.send_otp_email") as mock_send:
+        response = TestClient(api.app).post(
+            "/admin/auth/request-code", json={"email": "Recruiter@Example.com"}
+        )
+    assert response.status_code == 200
+    assert response.json() == {"status": "sent"}
+    mock_send.assert_called_once()
+    sent_to, _code = mock_send.call_args[0]
+    assert sent_to == "recruiter@example.com"  # normalized to lowercase
+
+    conn = sqlite3.connect(api_db)
+    row = conn.execute("SELECT email FROM admin_login_codes").fetchone()
+    conn.close()
+    assert row[0] == "recruiter@example.com"
+
+
+def test_request_code_rate_limited(api_db):
+    """Excess requests for the same email — from the same TestClient, so also
+    the same source IP — are eventually rejected once either the per-email or
+    per-IP cap is hit. Otherwise this endpoint would let anyone spam an
+    arbitrary inbox with codes from your service Gmail account."""
+    client = TestClient(api.app)
+    limit = min(api._MAX_CODE_REQUESTS_PER_EMAIL_PER_HOUR, api._MAX_CODE_REQUESTS_PER_IP_PER_HOUR)
+    with patch("metallictrends.api.app.send_otp_email"):
+        for _ in range(limit):
+            resp = client.post("/admin/auth/request-code", json={"email": "same@example.com"})
+            assert resp.status_code == 200
+        over_limit = client.post("/admin/auth/request-code", json={"email": "same@example.com"})
+    assert over_limit.status_code == 429
+
+
+def _request_code(client: TestClient, email: str) -> str:
+    """Test helper: requests a code via the real endpoint (with sending
+    mocked) and returns the plaintext code that would have been emailed."""
+    with patch("metallictrends.api.app.send_otp_email") as mock_send:
+        response = client.post("/admin/auth/request-code", json={"email": email})
+    assert response.status_code == 200
+    return mock_send.call_args[0][1]
+
+
+def test_verify_code_returns_501_when_session_secret_unconfigured(api_db, monkeypatch):
+    monkeypatch.delenv("ADMIN_SESSION_SECRET", raising=False)
+    client = TestClient(api.app)
+    code = _request_code(client, "person@example.com")
+    response = client.post("/admin/auth/verify-code", json={"email": "person@example.com", "code": code})
+    assert response.status_code == 501
+
+
+def test_verify_code_rejects_wrong_code(api_db, monkeypatch):
+    monkeypatch.setenv("ADMIN_SESSION_SECRET", "test-secret")
+    client = TestClient(api.app)
+    _request_code(client, "person@example.com")
+    response = client.post(
+        "/admin/auth/verify-code", json={"email": "person@example.com", "code": "000000"}
+    )
+    assert response.status_code == 401
+
+
+def test_verify_code_succeeds_and_unlocks_the_dashboard(api_db, monkeypatch):
+    """The full happy path: request a code, verify it, and the session cookie
+    that verify-code sets is enough to see the real dashboard on /admin."""
+    monkeypatch.setenv("ADMIN_SESSION_SECRET", "test-secret")
+    client = TestClient(api.app)
+    code = _request_code(client, "person@example.com")
+
+    verify = client.post(
+        "/admin/auth/verify-code", json={"email": "person@example.com", "code": code}
+    )
+    assert verify.status_code == 200
+    assert "mt_admin_session" in verify.cookies
+
+    dashboard = client.get("/admin")
+    assert dashboard.status_code == 200
+    assert "Admin Dashboard" in dashboard.text
+    assert "person@example.com" in dashboard.text
+
+
+def test_logout_clears_the_session_and_shows_login_form_again(api_db, monkeypatch):
+    """After logging out, /admin shows the login form again instead of the
+    dashboard — logout actually revokes access, not just a UI-only state."""
+    monkeypatch.setenv("ADMIN_SESSION_SECRET", "test-secret")
+    client = TestClient(api.app)
+    code = _request_code(client, "person@example.com")
+    client.post("/admin/auth/verify-code", json={"email": "person@example.com", "code": code})
+    assert "Admin Dashboard" in client.get("/admin").text
+
+    logout = client.post("/admin/auth/logout")
+    assert logout.status_code == 200
+
+    after = client.get("/admin")
+    assert "Admin Login" in after.text
+    assert "Admin Dashboard" not in after.text
+
+
+def test_verify_code_cannot_be_reused(api_db, monkeypatch):
+    """A code is single-use — verifying it twice fails the second time."""
+    monkeypatch.setenv("ADMIN_SESSION_SECRET", "test-secret")
+    client = TestClient(api.app)
+    code = _request_code(client, "person@example.com")
+    first = client.post("/admin/auth/verify-code", json={"email": "person@example.com", "code": code})
+    assert first.status_code == 200
+    second = client.post("/admin/auth/verify-code", json={"email": "person@example.com", "code": code})
+    assert second.status_code == 401
+
+
+def test_verify_code_locks_out_after_max_attempts(api_db, monkeypatch):
+    """5 wrong guesses invalidate the code entirely — even the real code no
+    longer works afterward, forcing a fresh request-code call rather than
+    letting an attacker keep guessing against one emailed code indefinitely."""
+    monkeypatch.setenv("ADMIN_SESSION_SECRET", "test-secret")
+    client = TestClient(api.app)
+    code = _request_code(client, "person@example.com")
+
+    for _ in range(5):
+        resp = client.post(
+            "/admin/auth/verify-code", json={"email": "person@example.com", "code": "000000"}
+        )
+        assert resp.status_code == 401
+
+    final = client.post("/admin/auth/verify-code", json={"email": "person@example.com", "code": code})
+    assert final.status_code == 401
