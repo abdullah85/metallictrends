@@ -21,8 +21,11 @@ Required environment variables (set these in Render's dashboard):
 import os
 import base64
 import logging
+import sqlite3
 
 import requests
+
+from metallictrends.db import init_db, record_github_sync
 
 logger = logging.getLogger(__name__)
 
@@ -41,26 +44,49 @@ HEADERS = {
 def push_db_to_github() -> None:
     """Commits the local DB file to GitHub. Deliberately has NO "[skip render]"
     phrase -- the resulting normal auto-deploy is what bakes the updated file
-    into the image Render restarts from next."""
+    into the image Render restarts from next.
+
+    Records its own outcome to github_sync_log (success/failure + error detail)
+    so the admin dashboard can show real sync history — the log row is written
+    to the local DB *after* the push, so it's only reflected on GitHub itself
+    starting with the next successful push. Any exception (network failure, a
+    non-2xx response, etc.) is caught here rather than left to propagate, since
+    this runs inline in the "/" route after a successful local backfill — a
+    sync hiccup shouldn't turn into a 500 for a page that already has fresh data."""
     if not os.path.exists(DB_PATH):
         return
 
-    with open(DB_PATH, "rb") as f:
-        content_b64 = base64.b64encode(f.read()).decode()
+    success = False
+    error_detail = None
+    try:
+        with open(DB_PATH, "rb") as f:
+            content_b64 = base64.b64encode(f.read()).decode()
 
-    get_resp = requests.get(API_URL, headers=HEADERS, params={"ref": GITHUB_BRANCH}, timeout=15)
-    sha = get_resp.json().get("sha") if get_resp.status_code == 200 else None
+        get_resp = requests.get(API_URL, headers=HEADERS, params={"ref": GITHUB_BRANCH}, timeout=15)
+        sha = get_resp.json().get("sha") if get_resp.status_code == 200 else None
 
-    payload = {
-        "message": "Update metals.db with latest fetched entries",
-        "content": content_b64,
-        "branch": GITHUB_BRANCH,
-    }
-    if sha:
-        payload["sha"] = sha
+        payload = {
+            "message": "Update metals.db with latest fetched entries",
+            "content": content_b64,
+            "branch": GITHUB_BRANCH,
+        }
+        if sha:
+            payload["sha"] = sha
 
-    put_resp = requests.put(API_URL, headers=HEADERS, json=payload, timeout=30)
-    if put_resp.status_code in (200, 201):
-        logger.info("Pushed metals.db to GitHub — Render will redeploy with this commit.")
-    else:
-        logger.error("Failed to push DB to GitHub: %s %s", put_resp.status_code, put_resp.text)
+        put_resp = requests.put(API_URL, headers=HEADERS, json=payload, timeout=30)
+        if put_resp.status_code in (200, 201):
+            logger.info("Pushed metals.db to GitHub — Render will redeploy with this commit.")
+            success = True
+        else:
+            error_detail = f"HTTP {put_resp.status_code}: {put_resp.text[:300]}"
+            logger.error("Failed to push DB to GitHub: %s %s", put_resp.status_code, put_resp.text)
+    except Exception as exc:
+        error_detail = str(exc)
+        logger.error("Failed to push DB to GitHub: %s", exc, exc_info=True)
+
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        init_db(conn)
+        record_github_sync(conn, "success" if success else "failed", error_detail=error_detail)
+    finally:
+        conn.close()

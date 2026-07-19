@@ -11,6 +11,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from metallictrends.db import init_db
 from metallictrends.ingestion.run import maybe_backfill
 from metallictrends.sync.github import push_db_to_github
 
@@ -30,8 +31,15 @@ templates = Jinja2Templates(directory="web")
 
 
 def _connect() -> sqlite3.Connection:
+    """init_db() is called on every connection, not just at CLI-backfill time —
+    the deployed DB file is seeded once from a local run.py invocation and then
+    persists across deploys via db_sync, so this is what lets schema additions
+    (new columns/tables) self-apply to that file without a manual migration
+    step. CREATE TABLE IF NOT EXISTS and the column-existence check it runs are
+    cheap no-ops once the schema is already current."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    init_db(conn)
     return conn
 
 

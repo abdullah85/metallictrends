@@ -31,3 +31,25 @@ def test_fetch_timeseries_raises_on_window_exceeding_30_days():
     """fetch_timeseries raises ValueError when the window is more than 30 days."""
     with pytest.raises(ValueError):
         fetch_timeseries("2023-01-01", "2023-02-01")
+
+
+def test_fetch_timeseries_logs_response_status_on_success(mock_10_day_response, caplog):
+    """The HTTP response status is recorded (before raise_for_status runs) so
+    every call's outcome is logged, not just its request."""
+    mock_10_day_response.status_code = 200
+    with patch("metallictrends.ingestion.client.requests.get", return_value=mock_10_day_response):
+        with caplog.at_level("INFO", logger="metallictrends.ingestion.client"):
+            fetch_timeseries("2023-01-01", "2023-01-10")
+    assert any("HTTP 200" in message for message in caplog.messages)
+
+
+def test_fetch_timeseries_logs_response_status_even_when_it_later_raises(mock_invalid_key_response, caplog):
+    """The status is logged even for an error response, since the log call
+    happens before raise_for_status() — otherwise a failure would skip
+    straight to the exception with no record of what was actually returned."""
+    mock_invalid_key_response.status_code = 401
+    with patch("metallictrends.ingestion.client.requests.get", return_value=mock_invalid_key_response):
+        with caplog.at_level("INFO", logger="metallictrends.ingestion.client"):
+            with pytest.raises(requests.exceptions.HTTPError):
+                fetch_timeseries("2023-01-01", "2023-01-10")
+    assert any("HTTP 401" in message for message in caplog.messages)

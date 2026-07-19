@@ -26,9 +26,26 @@ def init_db(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS backfill_attempts (
             attempt_date TEXT NOT NULL,
             attempted_at TEXT NOT NULL,
-            status       TEXT NOT NULL CHECK(status IN ('success', 'failed'))
+            status       TEXT NOT NULL CHECK(status IN ('success', 'failed')),
+            error_detail TEXT
+        );
+        CREATE TABLE IF NOT EXISTS github_sync_log (
+            attempted_at TEXT NOT NULL,
+            status       TEXT NOT NULL CHECK(status IN ('success', 'failed')),
+            error_detail TEXT
         );
     """)
+    # CREATE TABLE IF NOT EXISTS is a no-op against a DB that already has
+    # backfill_attempts without this column (e.g. the live deployed DB) — this
+    # fills the gap on both fresh and pre-existing databases alike.
+    _ensure_column(conn, "backfill_attempts", "error_detail", "TEXT")
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, coltype: str) -> None:
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
+        conn.commit()
 
 
 def save_metal_prices(conn: sqlite3.Connection, date: str, metals: dict) -> None:
@@ -61,18 +78,20 @@ def update_window_status(
 
 
 def record_backfill_attempt(
-    conn: sqlite3.Connection, attempt_date: str, status: str, attempted_at: str | None = None
+    conn: sqlite3.Connection, attempt_date: str, status: str, attempted_at: str | None = None,
+    error_detail: str | None = None,
 ) -> None:
     """`attempted_at` defaults to the real current time, but callers that already
     have a reference "now" (e.g. run.maybe_backfill) should pass it explicitly —
     otherwise this row's timestamp silently drifts from whatever clock the
     caller used to decide *whether* to attempt, which breaks time-based spacing
-    checks that compare against it."""
+    checks that compare against it. `error_detail` is the failure reason (e.g.
+    the exception message from fetch_timeseries) — None for a successful attempt."""
     attempted_at = attempted_at or datetime.now(timezone.utc).isoformat()
     conn.execute(
-        """INSERT INTO backfill_attempts (attempt_date, attempted_at, status)
-           VALUES (?, ?, ?)""",
-        (attempt_date, attempted_at, status),
+        """INSERT INTO backfill_attempts (attempt_date, attempted_at, status, error_detail)
+           VALUES (?, ?, ?, ?)""",
+        (attempt_date, attempted_at, status, error_detail),
     )
     conn.commit()
 
@@ -95,3 +114,19 @@ def last_backfill_attempt_at(conn: sqlite3.Connection, status: str) -> str | Non
         (status,),
     ).fetchone()
     return row[0]
+
+
+def record_github_sync(
+    conn: sqlite3.Connection, status: str, attempted_at: str | None = None,
+    error_detail: str | None = None,
+) -> None:
+    """Records the outcome of a push_db_to_github() attempt. Kept separate from
+    backfill_attempts since a sync can be triggered any time new rows are
+    written, not only from the homepage catch-up path."""
+    attempted_at = attempted_at or datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """INSERT INTO github_sync_log (attempted_at, status, error_detail)
+           VALUES (?, ?, ?)""",
+        (attempted_at, status, error_detail),
+    )
+    conn.commit()

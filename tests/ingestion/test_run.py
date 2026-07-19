@@ -142,17 +142,20 @@ def test_backfill_recent_caps_at_1_month_in_1_request(db_conn, fake_fetch_timese
 
 def test_backfill_recent_returns_true_on_success(db_conn, fake_fetch_timeseries):
     """backfill_recent reports success back to its caller (maybe_backfill relies
-    on this to decide whether to log/record a failed attempt)."""
+    on this to decide whether to log/record a failed attempt), with no error detail."""
     _seed_gold_price(db_conn, "2023-01-01")
     with patch("metallictrends.ingestion.run.fetch_timeseries", side_effect=fake_fetch_timeseries):
-        assert backfill_recent(db_conn, today=date(2023, 1, 11)) is True
+        assert backfill_recent(db_conn, today=date(2023, 1, 11)) == (True, None)
 
 
 def test_backfill_recent_returns_false_on_failure(db_conn):
-    """backfill_recent reports failure when the underlying fetch raises."""
+    """backfill_recent reports failure when the underlying fetch raises, along
+    with the exception message as error detail."""
     _seed_gold_price(db_conn, "2023-01-01")
-    with patch("metallictrends.ingestion.run.fetch_timeseries", side_effect=requests.exceptions.ConnectionError()):
-        assert backfill_recent(db_conn, today=date(2023, 1, 11)) is False
+    with patch("metallictrends.ingestion.run.fetch_timeseries", side_effect=requests.exceptions.ConnectionError("boom")):
+        success, error_detail = backfill_recent(db_conn, today=date(2023, 1, 11))
+    assert success is False
+    assert "boom" in error_detail
 
 
 def test_backfill_recent_records_fetched_windows(db_conn, fake_fetch_timeseries):
@@ -192,7 +195,8 @@ def test_run_backfill_returns_false_when_any_window_fails(db_conn, fake_fetch_ti
         return result
 
     with patch("metallictrends.ingestion.run.fetch_timeseries", side_effect=_flaky):
-        assert run_backfill(db_conn, "2023-01-01", "2023-03-01") is False
+        all_fetched, _ = run_backfill(db_conn, "2023-01-01", "2023-03-01")
+    assert all_fetched is False
 
 
 # --- maybe_backfill ---
@@ -238,6 +242,29 @@ def test_maybe_backfill_logs_and_records_failure(db_conn, caplog):
     ).fetchone()
     assert row[0] == "failed"
     assert any("2023-01-11" in message for message in caplog.messages)
+
+
+def test_maybe_backfill_records_error_detail_on_failure(db_conn):
+    """The underlying exception's message is persisted as error_detail, so a
+    failed attempt's cause is visible without digging through logs."""
+    _seed_gold_price(db_conn, "2023-01-01")
+    with patch("metallictrends.ingestion.run.fetch_timeseries", side_effect=requests.exceptions.ConnectionError("boom")):
+        maybe_backfill(db_conn, now=datetime(2023, 1, 11, tzinfo=timezone.utc))
+    row = db_conn.execute(
+        "SELECT error_detail FROM backfill_attempts WHERE attempt_date = ?", ("2023-01-11",)
+    ).fetchone()
+    assert "boom" in row[0]
+
+
+def test_maybe_backfill_records_no_error_detail_on_success(db_conn, fake_fetch_timeseries):
+    """A successful attempt has no error_detail."""
+    _seed_gold_price(db_conn, "2023-01-01")
+    with patch("metallictrends.ingestion.run.fetch_timeseries", side_effect=fake_fetch_timeseries):
+        maybe_backfill(db_conn, now=datetime(2023, 1, 11, tzinfo=timezone.utc))
+    row = db_conn.execute(
+        "SELECT error_detail FROM backfill_attempts WHERE attempt_date = ?", ("2023-01-11",)
+    ).fetchone()
+    assert row[0] is None
 
 
 def test_maybe_backfill_skips_retry_within_spacing_interval(db_conn, fake_fetch_timeseries):

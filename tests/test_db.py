@@ -1,11 +1,15 @@
+import sqlite3
+
 import pytest
 from metallictrends.db import (
+    init_db,
     save_metal_prices,
     save_fx_rates,
     update_window_status,
     record_backfill_attempt,
     count_backfill_attempts,
     last_backfill_attempt_at,
+    record_github_sync,
 )
 
 
@@ -90,3 +94,57 @@ def test_last_backfill_attempt_at_returns_most_recent_timestamp(db_conn):
 def test_last_backfill_attempt_at_returns_none_when_no_rows(db_conn):
     """With no attempts recorded yet, there's nothing to space retries against."""
     assert last_backfill_attempt_at(db_conn, "failed") is None
+
+
+def test_record_backfill_attempt_stores_error_detail(db_conn):
+    """A failed attempt's error_detail is persisted alongside its status."""
+    record_backfill_attempt(db_conn, "2023-01-01", "failed", error_detail="ConnectionError: boom")
+    row = db_conn.execute("SELECT error_detail FROM backfill_attempts").fetchone()
+    assert row[0] == "ConnectionError: boom"
+
+
+def test_record_backfill_attempt_error_detail_defaults_to_none(db_conn):
+    """A successful attempt has no error_detail unless one is explicitly given."""
+    record_backfill_attempt(db_conn, "2023-01-01", "success")
+    row = db_conn.execute("SELECT error_detail FROM backfill_attempts").fetchone()
+    assert row[0] is None
+
+
+def test_record_github_sync_inserts_row(db_conn):
+    """record_github_sync inserts one row with the given status and error detail."""
+    record_github_sync(db_conn, "failed", "2023-01-01T06:00:00+00:00", error_detail="HTTP 500: boom")
+    row = db_conn.execute(
+        "SELECT attempted_at, status, error_detail FROM github_sync_log"
+    ).fetchone()
+    assert row == ("2023-01-01T06:00:00+00:00", "failed", "HTTP 500: boom")
+
+
+def test_init_db_migrates_existing_backfill_attempts_table(tmp_path):
+    """init_db() adds the error_detail column (and the github_sync_log table)
+    to a DB created before this column existed, without losing existing rows —
+    this is what lets the schema self-apply to the already-deployed DB file
+    instead of requiring a manual migration step."""
+    db_path = tmp_path / "old.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript("""
+        CREATE TABLE backfill_attempts (
+            attempt_date TEXT NOT NULL,
+            attempted_at TEXT NOT NULL,
+            status       TEXT NOT NULL CHECK(status IN ('success', 'failed'))
+        );
+    """)
+    conn.execute(
+        "INSERT INTO backfill_attempts (attempt_date, attempted_at, status) VALUES (?, ?, ?)",
+        ("2023-01-01", "2023-01-01T00:00:00+00:00", "success"),
+    )
+    conn.commit()
+
+    init_db(conn)
+
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(backfill_attempts)")}
+    assert "error_detail" in columns
+    row = conn.execute("SELECT attempt_date, status FROM backfill_attempts").fetchone()
+    assert row == ("2023-01-01", "success")
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "github_sync_log" in tables
+    conn.close()

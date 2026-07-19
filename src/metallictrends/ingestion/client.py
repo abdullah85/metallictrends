@@ -35,5 +35,12 @@ def fetch_timeseries(start_date: str, end_date: str) -> dict:
             "end_date": end_date,
         },
     )
+    # Recorded before raise_for_status() so the outcome is always logged, not
+    # just on success — a non-2xx response would otherwise skip straight to
+    # the exception with no trace of what metals.dev actually returned.
+    logger.info(
+        "metals.dev response for %s to %s: HTTP %s",
+        start_date, end_date, response.status_code,
+    )
     response.raise_for_status()
     return response.json()

@@ -57,11 +57,11 @@ def needs_backfill(conn: sqlite3.Connection, today: date | None = None) -> bool:
     return timedelta.days > 1 # Logic can be improved further
 
 
-def backfill_recent(conn: sqlite3.Connection, today: date | None = None) -> bool:
+def backfill_recent(conn: sqlite3.Connection, today: date | None = None) -> tuple[bool, str | None]:
     """Catch up from the day after the latest stored date, capped at 1 month
     (30 days) thus capping the backend call to at most 1 request.
-    Assumes needs_backfill(conn, today) is already True. Returns True if the
-    window fetched successfully, False if it failed."""
+    Assumes needs_backfill(conn, today) is already True. Returns (True, None)
+    if the window fetched successfully, (False, error_detail) if it failed."""
     row = conn.execute("SELECT MAX(date) AS d FROM metal_prices").fetchone()
     last = date.fromisoformat(row[0])
     today = today or date.today()
@@ -107,18 +107,22 @@ def maybe_backfill(conn: sqlite3.Connection, now: datetime | None = None) -> boo
             )
             return False
 
-    if backfill_recent(conn, today):
+    success, error_detail = backfill_recent(conn, today)
+    if success:
         record_backfill_attempt(conn, today_str, "success", now.isoformat())
     else:
         logger.error("Homepage backfill attempt failed for %s", today_str)
-        record_backfill_attempt(conn, today_str, "failed", now.isoformat())
+        record_backfill_attempt(conn, today_str, "failed", now.isoformat(), error_detail=error_detail)
     return True
 
 
-def run_backfill(conn: sqlite3.Connection, start_date: str, end_date: str) -> bool:
+def run_backfill(conn: sqlite3.Connection, start_date: str, end_date: str) -> tuple[bool, str | None]:
     """Fetch and store all windows in [start_date, end_date], skipping completed ones.
-    Returns True if every window ended up 'fetched', False if any failed."""
+    Returns (True, None) if every window ended up 'fetched', (False, error_detail)
+    if any failed — error_detail is the most recent failure's message, since a
+    homepage-triggered call always covers exactly one window anyway."""
     all_fetched = True
+    last_error_detail = None
     for start, end in chunk_date_range(start_date, end_date):
         if _is_fetched(conn, start, end):
             continue
@@ -136,11 +140,12 @@ def run_backfill(conn: sqlite3.Connection, start_date: str, end_date: str) -> bo
                 save_metal_prices(conn, day, day_data["metals"])
                 save_fx_rates(conn, day, day_data["currencies"])
             update_window_status(conn, start, end, "fetched")
-        except Exception:
+        except Exception as exc:
             update_window_status(conn, start, end, "failed")
             logger.warning("Failed to fetch window %s to %s", start, end, exc_info=True)
             all_fetched = False
-    return all_fetched
+            last_error_detail = str(exc)
+    return all_fetched, last_error_detail
 
 
 def main() -> None:
