@@ -9,6 +9,18 @@ import metallictrends.api.app as api
 from metallictrends.db import init_db
 
 
+@pytest.fixture(autouse=True)
+def _mock_commit_migration_file(monkeypatch):
+    """Prevents every test in this file from making a real GitHub API call —
+    index() and admin_verify_code() both call commit_migration_file() on
+    success, and without this, any test that triggers those paths would
+    silently push to the real repo configured in .env."""
+    monkeypatch.setattr(
+        api, "commit_migration_file",
+        lambda conn, filename, content, skip_render=False: True,
+    )
+
+
 @pytest.fixture
 def api_db(tmp_path, monkeypatch):
     """Points api.py at a fresh, file-backed SQLite DB (not :memory:, which would
@@ -265,6 +277,32 @@ def test_verify_code_succeeds_and_unlocks_the_dashboard(api_db, monkeypatch):
     )
     assert verify.status_code == 200
     assert "mt_admin_session" in verify.cookies
+
+
+def test_verify_code_success_syncs_the_issued_code_but_not_rate_limited_rows(api_db, monkeypatch):
+    """A successful login syncs the issued code just verified. An unrelated
+    rate-limited log row stays local — it's never synced, by design (only
+    for local visibility into abuse patterns)."""
+    monkeypatch.setenv("ADMIN_SESSION_SECRET", "test-secret")
+    client = TestClient(api.app)
+
+    conn = sqlite3.connect(api_db)
+    conn.execute(
+        """INSERT INTO admin_login_codes (email, code_hash, created_at, expires_at, ip, status)
+           VALUES ('bot@example.com', '', '2023-01-01T00:00:00+00:00', '2023-01-01T00:00:00+00:00',
+                   '6.6.6.6', 'rate_limited_ip')"""
+    )
+    conn.commit()
+    conn.close()
+
+    code = _request_code(client, "person@example.com")
+    client.post("/admin/auth/verify-code", json={"email": "person@example.com", "code": code})
+
+    conn = sqlite3.connect(api_db)
+    rows = {email: synced_at for email, synced_at in conn.execute("SELECT email, synced_at FROM admin_login_codes")}
+    conn.close()
+    assert rows["person@example.com"] is not None
+    assert rows["bot@example.com"] is None
 
     dashboard = client.get("/admin")
     assert dashboard.status_code == 200

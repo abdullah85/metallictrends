@@ -75,3 +75,61 @@ def test_push_db_to_github_does_nothing_when_db_file_missing(tmp_path, monkeypat
         github_sync.push_db_to_github()
     mock_get.assert_not_called()
     assert not missing_path.exists()
+
+
+# --- commit_migration_file ---
+
+def test_commit_migration_file_records_success(db_conn):
+    """A successful commit (no existing sha, then a 201 PUT) returns True and
+    is recorded as a 'success' row in github_sync_log."""
+    with patch.object(github_sync.requests, "get", return_value=_mock_response(404)), \
+         patch.object(github_sync.requests, "put", return_value=_mock_response(201)):
+        result = github_sync.commit_migration_file(db_conn, "20260719_120000_backfill.sql", "INSERT INTO foo VALUES (1);")
+    assert result is True
+    row = db_conn.execute("SELECT status, error_detail FROM github_sync_log").fetchone()
+    assert row == ("success", None)
+
+
+def test_commit_migration_file_records_failure_on_non_2xx(db_conn):
+    with patch.object(github_sync.requests, "get", return_value=_mock_response(404)), \
+         patch.object(github_sync.requests, "put", return_value=_mock_response(500, text="server error")):
+        result = github_sync.commit_migration_file(db_conn, "20260719_120000_backfill.sql", "INSERT INTO foo VALUES (1);")
+    assert result is False
+    row = db_conn.execute("SELECT status, error_detail FROM github_sync_log").fetchone()
+    assert row[0] == "failed"
+    assert "500" in row[1]
+
+
+def test_commit_migration_file_records_failure_on_network_error(db_conn):
+    with patch.object(github_sync.requests, "get", side_effect=ConnectionError("no network")):
+        result = github_sync.commit_migration_file(db_conn, "20260719_120000_backfill.sql", "INSERT INTO foo VALUES (1);")
+    assert result is False
+    row = db_conn.execute("SELECT status, error_detail FROM github_sync_log").fetchone()
+    assert row[0] == "failed"
+    assert "no network" in row[1]
+
+
+def test_commit_migration_file_targets_the_migrations_path(db_conn):
+    """The commit goes to migrations/<filename>, not the DB_PATH used by
+    push_db_to_github — these two functions write to different places."""
+    with patch.object(github_sync.requests, "get", return_value=_mock_response(404)) as mock_get, \
+         patch.object(github_sync.requests, "put", return_value=_mock_response(201)) as mock_put:
+        github_sync.commit_migration_file(db_conn, "20260719_120000_backfill.sql", "INSERT INTO foo VALUES (1);")
+    assert mock_get.call_args[0][0].endswith("/contents/migrations/20260719_120000_backfill.sql")
+    assert mock_put.call_args[0][0].endswith("/contents/migrations/20260719_120000_backfill.sql")
+
+
+def test_commit_migration_file_appends_skip_render_when_requested(db_conn):
+    with patch.object(github_sync.requests, "get", return_value=_mock_response(404)), \
+         patch.object(github_sync.requests, "put", return_value=_mock_response(201)) as mock_put:
+        github_sync.commit_migration_file(
+            db_conn, "20260719_120000_admin_login.sql", "INSERT INTO foo VALUES (1);", skip_render=True
+        )
+    assert "[skip render]" in mock_put.call_args[1]["json"]["message"]
+
+
+def test_commit_migration_file_omits_skip_render_by_default(db_conn):
+    with patch.object(github_sync.requests, "get", return_value=_mock_response(404)), \
+         patch.object(github_sync.requests, "put", return_value=_mock_response(201)) as mock_put:
+        github_sync.commit_migration_file(db_conn, "20260719_120000_backfill.sql", "INSERT INTO foo VALUES (1);")
+    assert "[skip render]" not in mock_put.call_args[1]["json"]["message"]

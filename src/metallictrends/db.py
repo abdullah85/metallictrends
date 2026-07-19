@@ -1,60 +1,120 @@
+import importlib.util
+import os
 import sqlite3
 from datetime import datetime, timezone
 
+MIGRATIONS_DIR = "migrations"
+
+
+def apply_pending_migrations(conn: sqlite3.Connection, migrations_dir: str = MIGRATIONS_DIR) -> list[str]:
+    """Applies any migration in `migrations_dir` not yet recorded in
+    schema_migrations, in filename order, and returns the filenames actually
+    applied. Idempotent by filename (not by re-inspecting the schema each
+    time), so it's safe to call repeatedly against the same database.
+
+    Migrations are .sql (run verbatim as a script) or .py (must define
+    migrate(conn)) — .py is for changes SQLite can't express safely as plain
+    SQL, e.g. adding a column only if it isn't already there, since SQLite
+    has no "ADD COLUMN IF NOT EXISTS"."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            filename   TEXT PRIMARY KEY,
+            applied_at TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+
+    applied = {row[0] for row in conn.execute("SELECT filename FROM schema_migrations")}
+    pending = sorted(
+        f for f in os.listdir(migrations_dir)
+        if f.endswith((".sql", ".py")) and f not in applied
+    )
+
+    newly_applied = []
+    for filename in pending:
+        path = os.path.join(migrations_dir, filename)
+        if filename.endswith(".sql"):
+            with open(path) as f:
+                conn.executescript(f.read())
+        else:
+            spec = importlib.util.spec_from_file_location(filename[:-3], path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            module.migrate(conn)
+        conn.execute(
+            "INSERT INTO schema_migrations (filename, applied_at) VALUES (?, ?)",
+            (filename, datetime.now(timezone.utc).isoformat()),
+        )
+        conn.commit()
+        newly_applied.append(filename)
+    return newly_applied
+
+
+def _sql_literal(value) -> str:
+    if value is None:
+        return "NULL"
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def generate_backfill_migration_sql(conn: sqlite3.Connection, since: str) -> str | None:
+    """Builds a data-migration SQL script replaying whatever a backfill call
+    just wrote: any backfill_windows marked 'fetched' at or after `since`
+    (captured just before the call), the metal_prices/fx_rates rows for
+    those windows' date ranges, and the matching backfill_attempts rows.
+    Returns None if nothing new was fetched (e.g. the attempt failed).
+
+    This is the alternative to committing the whole binary metals.db file on
+    every backfill: a small, diffable, human-readable script that
+    apply_pending_migrations() replays on a freshly-restored DB after a
+    Render restart, instead of restoring a giant opaque blob."""
+    windows = conn.execute(
+        """SELECT start_date, end_date, fetched_at FROM backfill_windows
+           WHERE status = 'fetched' AND fetched_at >= ? ORDER BY start_date""",
+        (since,),
+    ).fetchall()
+    if not windows:
+        return None
+
+    lines = []
+    for start_date, end_date, fetched_at in windows:
+        for d, metal, price_usd in conn.execute(
+            "SELECT date, metal, price_usd FROM metal_prices WHERE date BETWEEN ? AND ? ORDER BY date, metal",
+            (start_date, end_date),
+        ):
+            lines.append(
+                f"INSERT OR IGNORE INTO metal_prices (date, metal, price_usd) "
+                f"VALUES ({_sql_literal(d)}, {_sql_literal(metal)}, {price_usd});"
+            )
+        for d, currency, rate_to_usd in conn.execute(
+            "SELECT date, currency, rate_to_usd FROM fx_rates WHERE date BETWEEN ? AND ? ORDER BY date, currency",
+            (start_date, end_date),
+        ):
+            lines.append(
+                f"INSERT OR IGNORE INTO fx_rates (date, currency, rate_to_usd) "
+                f"VALUES ({_sql_literal(d)}, {_sql_literal(currency)}, {rate_to_usd});"
+            )
+        lines.append(
+            f"INSERT OR IGNORE INTO backfill_windows (start_date, end_date, status, fetched_at) "
+            f"VALUES ({_sql_literal(start_date)}, {_sql_literal(end_date)}, 'fetched', {_sql_literal(fetched_at)});"
+        )
+    for attempt_date, attempted_at, status, error_detail in conn.execute(
+        """SELECT attempt_date, attempted_at, status, error_detail
+           FROM backfill_attempts WHERE attempted_at >= ?""",
+        (since,),
+    ):
+        lines.append(
+            f"INSERT INTO backfill_attempts (attempt_date, attempted_at, status, error_detail) "
+            f"VALUES ({_sql_literal(attempt_date)}, {_sql_literal(attempted_at)}, "
+            f"{_sql_literal(status)}, {_sql_literal(error_detail)});"
+        )
+    return "\n".join(lines) + "\n"
+
 
 def init_db(conn: sqlite3.Connection) -> None:
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS metal_prices (
-            date    TEXT NOT NULL,
-            metal   TEXT NOT NULL,
-            price_usd REAL NOT NULL,
-            UNIQUE(date, metal)
-        );
-        CREATE TABLE IF NOT EXISTS fx_rates (
-            date        TEXT NOT NULL,
-            currency    TEXT NOT NULL,
-            rate_to_usd REAL NOT NULL,
-            UNIQUE(date, currency)
-        );
-        CREATE TABLE IF NOT EXISTS backfill_windows (
-            start_date TEXT NOT NULL,
-            end_date   TEXT NOT NULL,
-            status     TEXT NOT NULL CHECK(status IN ('pending', 'fetched', 'failed')),
-            fetched_at TEXT,
-            UNIQUE(start_date, end_date)
-        );
-        CREATE TABLE IF NOT EXISTS backfill_attempts (
-            attempt_date TEXT NOT NULL,
-            attempted_at TEXT NOT NULL,
-            status       TEXT NOT NULL CHECK(status IN ('success', 'failed')),
-            error_detail TEXT
-        );
-        CREATE TABLE IF NOT EXISTS github_sync_log (
-            attempted_at TEXT NOT NULL,
-            status       TEXT NOT NULL CHECK(status IN ('success', 'failed')),
-            error_detail TEXT
-        );
-        CREATE TABLE IF NOT EXISTS admin_login_codes (
-            email      TEXT NOT NULL,
-            code_hash  TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            expires_at TEXT NOT NULL,
-            used_at    TEXT,
-            attempts   INTEGER NOT NULL DEFAULT 0,
-            ip         TEXT
-        );
-    """)
-    # CREATE TABLE IF NOT EXISTS is a no-op against a DB that already has
-    # backfill_attempts without this column (e.g. the live deployed DB) — this
-    # fills the gap on both fresh and pre-existing databases alike.
-    _ensure_column(conn, "backfill_attempts", "error_detail", "TEXT")
-
-
-def _ensure_column(conn: sqlite3.Connection, table: str, column: str, coltype: str) -> None:
-    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
-    if column not in existing:
-        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
-        conn.commit()
+    """Kept as the entry point existing callers (the CLI backfill/backup
+    tools, tests, db_sync) already use — just applies whatever migrations
+    are pending."""
+    apply_pending_migrations(conn)
 
 
 def save_metal_prices(conn: sqlite3.Connection, date: str, metals: dict) -> None:
@@ -143,15 +203,19 @@ def record_github_sync(
 
 def create_login_code(
     conn: sqlite3.Connection, email: str, code_hash: str, created_at: str,
-    expires_at: str, ip: str | None = None,
+    expires_at: str, ip: str | None = None, status: str = "issued",
 ) -> int:
-    """Stores a hashed one-time login code. Also doubles as the access log —
-    every request, successful or not, leaves a row here with the requesting
-    email and IP."""
+    """Stores a hashed one-time login code, or logs a rejected request —
+    `status` is "issued" for a real code, or "rate_limited_email"/
+    "rate_limited_ip" for a request that was refused for exceeding one of
+    those caps (still worth logging, for tracking abuse patterns). Either
+    way this doubles as the access log: every request leaves a row here with
+    the requesting email and IP, synced to GitHub separately (see
+    generate_admin_login_migration_sql) once its login flow concludes."""
     cur = conn.execute(
-        """INSERT INTO admin_login_codes (email, code_hash, created_at, expires_at, ip)
-           VALUES (?, ?, ?, ?, ?)""",
-        (email, code_hash, created_at, expires_at, ip),
+        """INSERT INTO admin_login_codes (email, code_hash, created_at, expires_at, ip, status)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (email, code_hash, created_at, expires_at, ip, status),
     )
     conn.commit()
     return cur.lastrowid
@@ -175,13 +239,16 @@ def count_recent_login_codes(
 
 
 def get_active_login_code(conn: sqlite3.Connection, email: str, now: str):
-    """The most recent unused, unexpired code for this email, if any. Columns
-    are returned in a fixed positional order (not by name) since callers may
-    or may not have sqlite3.Row set as the connection's row_factory."""
+    """The most recent unused, unexpired, actually-issued code for this
+    email, if any — excludes rate-limit log rows explicitly (not just via
+    their already-expired expires_at) so they can never be matched here.
+    Columns are returned in a fixed positional order (not by name) since
+    callers may or may not have sqlite3.Row set as the connection's
+    row_factory."""
     return conn.execute(
         """SELECT rowid, email, code_hash, created_at, expires_at, used_at, attempts, ip
            FROM admin_login_codes
-           WHERE email = ? AND used_at IS NULL AND expires_at > ?
+           WHERE email = ? AND status = 'issued' AND used_at IS NULL AND expires_at > ?
            ORDER BY created_at DESC LIMIT 1""",
         (email, now),
     ).fetchone()
@@ -206,5 +273,56 @@ def mark_login_code_used(conn: sqlite3.Connection, row_id: int, used_at: str) ->
     or to shut down further guesses once the attempt cap is hit."""
     conn.execute(
         "UPDATE admin_login_codes SET used_at = ? WHERE rowid = ?", (used_at, row_id)
+    )
+    conn.commit()
+
+
+def generate_admin_login_migration_sql(
+    conn: sqlite3.Connection, synced_at: str
+) -> tuple[str, list[int]] | None:
+    """Builds a data-migration SQL script replaying admin_login_codes rows
+    not yet synced (synced_at IS NULL) — only ones with status='issued'.
+    Rate-limited log rows are deliberately excluded and stay local-only
+    forever: they're for your own local visibility into abuse patterns, not
+    something worth a GitHub commit. Returns (sql, row_ids) so the caller can
+    mark exactly those rows synced locally once the commit actually succeeds
+    (see mark_login_codes_synced) — a failed push leaves them unsynced, to
+    be retried on the next successful login.
+
+    The generated INSERTs set synced_at = the given `synced_at` (not NULL) —
+    critical, since these rows get replayed by apply_pending_migrations() on
+    a freshly-restored DB after a restart. Without this, a replayed row would
+    look unsynced on the new instance and get bundled into yet another
+    migration file the next time someone logs in, duplicating it forever
+    (admin_login_codes has no unique constraint to fall back on).
+
+    Uses synced_at rather than a timestamp cutoff because a code is
+    requested in one HTTP request and verified in a separate, later one, so
+    there's no single "since" that spans both."""
+    rows = conn.execute(
+        """SELECT rowid, email, code_hash, created_at, expires_at, used_at, attempts, ip, status
+           FROM admin_login_codes WHERE synced_at IS NULL AND status = 'issued' ORDER BY created_at"""
+    ).fetchall()
+    if not rows:
+        return None
+
+    lines = []
+    row_ids = []
+    for rowid, email, code_hash, created_at, expires_at, used_at, attempts, ip, status in rows:
+        row_ids.append(rowid)
+        lines.append(
+            f"INSERT OR IGNORE INTO admin_login_codes "
+            f"(email, code_hash, created_at, expires_at, used_at, attempts, ip, status, synced_at) "
+            f"VALUES ({_sql_literal(email)}, {_sql_literal(code_hash)}, {_sql_literal(created_at)}, "
+            f"{_sql_literal(expires_at)}, {_sql_literal(used_at)}, {attempts}, "
+            f"{_sql_literal(ip)}, {_sql_literal(status)}, {_sql_literal(synced_at)});"
+        )
+    return "\n".join(lines) + "\n", row_ids
+
+
+def mark_login_codes_synced(conn: sqlite3.Connection, row_ids: list[int], synced_at: str) -> None:
+    conn.executemany(
+        "UPDATE admin_login_codes SET synced_at = ? WHERE rowid = ?",
+        [(synced_at, rid) for rid in row_ids],
     )
     conn.commit()

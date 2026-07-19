@@ -20,16 +20,19 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from metallictrends.db import (
+    apply_pending_migrations,
     count_recent_login_codes,
     create_login_code,
+    generate_admin_login_migration_sql,
+    generate_backfill_migration_sql,
     get_active_login_code,
     increment_login_code_attempts,
-    init_db,
     mark_login_code_used,
+    mark_login_codes_synced,
 )
 from metallictrends.ingestion.run import maybe_backfill
 from metallictrends.notify.email import send_otp_email
-from metallictrends.sync.github import push_db_to_github
+from metallictrends.sync.github import commit_migration_file
 
 logging.basicConfig(level=logging.INFO)
 
@@ -55,15 +58,13 @@ templates = Jinja2Templates(directory="web")
 
 
 def _connect() -> sqlite3.Connection:
-    """init_db() is called on every connection, not just at CLI-backfill time —
-    the deployed DB file is seeded once from a local run.py invocation and then
-    persists across deploys via db_sync, so this is what lets schema additions
-    (new columns/tables) self-apply to that file without a manual migration
-    step. CREATE TABLE IF NOT EXISTS and the column-existence check it runs are
-    cheap no-ops once the schema is already current."""
+    """A plain connection — schema migrations are no longer applied here on
+    every call. They're run explicitly at specific entry points instead (see
+    index() and the /admin/auth/* handlers) so a request that doesn't touch
+    migration-sensitive tables isn't paying for a schema_migrations check on
+    every hit."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    init_db(conn)
     return conn
 
 
@@ -212,17 +213,25 @@ def _latest_meta(conn: sqlite3.Connection) -> dict:
 def index(request: Request):
     """Renders the landing page itself, injecting `_latest_meta`'s values server-side.
     Must be registered before the StaticFiles mount below so it wins for the exact "/"
-    path; the mount still serves everything else (assets/, etc.). If the stored data
-    has fallen behind today, catches up (capped at 1 month/1 request per load,
-    with failed attempts capped at 3/day and spaced at least 8h apart) before
-    rendering so the page never serves data staler than it needs to. New rows are
-    committed to GitHub right after — that commit is what Render's next restart
-    checks out, so no separate restore step is needed anywhere in this file."""
+    path; the mount still serves everything else (assets/, etc.). Applies any pending
+    schema migrations first — "/" is virtually always the first route a visitor hits,
+    so this is the main place the schema gets brought current. If the stored data has
+    fallen behind today, catches up (capped at 1 month/1 request per load, with failed
+    attempts capped at 3/day and spaced at least 8h apart) before rendering so the page
+    never serves data staler than it needs to. On a successful catch-up, the newly
+    fetched rows are committed to GitHub as a small data-migration file (not the whole
+    DB) — apply_pending_migrations() replays it on the next boot, so this is what
+    survives a Render restart."""
     with _connect() as conn:
+        apply_pending_migrations(conn)
+        since = datetime.now(timezone.utc)
         backfilled = maybe_backfill(conn)
+        if backfilled:
+            migration_sql = generate_backfill_migration_sql(conn, since.isoformat())
+            if migration_sql:
+                filename = f"{since:%Y%m%d_%H%M%S}_backfill.sql"
+                commit_migration_file(conn, filename, migration_sql)
         context = _latest_meta(conn)
-    if backfilled:
-        push_db_to_github()
     return templates.TemplateResponse(request, "index.html", context)
 
 
@@ -351,6 +360,7 @@ def admin_request_code(body: _RequestCodeBody, request: Request):
     since = (now - timedelta(hours=1)).isoformat()
 
     with _connect() as conn:
+        apply_pending_migrations(conn)
         if count_recent_login_codes(conn, email=email, since=since) >= _MAX_CODE_REQUESTS_PER_EMAIL_PER_HOUR:
             raise HTTPException(429, "Too many code requests for this email. Try again later.")
         if ip and count_recent_login_codes(conn, ip=ip, since=since) >= _MAX_CODE_REQUESTS_PER_IP_PER_HOUR:
@@ -381,6 +391,7 @@ def admin_verify_code(body: _VerifyCodeBody, response: Response):
     now = datetime.now(timezone.utc).isoformat()
 
     with _connect() as conn:
+        apply_pending_migrations(conn)
         row = get_active_login_code(conn, email, now)
         if row is None:
             raise HTTPException(401, "Invalid or expired code.")
@@ -396,6 +407,18 @@ def admin_verify_code(body: _VerifyCodeBody, response: Response):
             raise HTTPException(401, "Invalid or expired code.")
 
         mark_login_code_used(conn, row_id, now)
+
+        # Persist the access log (this issued code — rate-limited rows are
+        # never synced) only now, on a real completed login, not on every
+        # request-code call. skip_render=True: a login shouldn't bounce the
+        # live service — this commit gets picked up on whatever the next
+        # real deploy happens to be (e.g. the next backfill push).
+        result = generate_admin_login_migration_sql(conn, now)
+        if result:
+            migration_sql, row_ids = result
+            filename = f"{datetime.now(timezone.utc):%Y%m%d_%H%M%S}_admin_login.sql"
+            if commit_migration_file(conn, filename, migration_sql, skip_render=True):
+                mark_login_codes_synced(conn, row_ids, now)
 
     token = _sign_session(email, secret, _SESSION_TTL_SECONDS)
     response.set_cookie(

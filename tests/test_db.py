@@ -2,7 +2,13 @@ import sqlite3
 
 import pytest
 from metallictrends.db import (
+    apply_pending_migrations,
+    create_login_code,
+    generate_admin_login_migration_sql,
+    generate_backfill_migration_sql,
+    get_active_login_code,
     init_db,
+    mark_login_codes_synced,
     save_metal_prices,
     save_fx_rates,
     update_window_status,
@@ -148,3 +154,226 @@ def test_init_db_migrates_existing_backfill_attempts_table(tmp_path):
     tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert "github_sync_log" in tables
     conn.close()
+
+
+# --- apply_pending_migrations ---
+
+def _write_migration(migrations_dir, filename: str, content: str) -> None:
+    (migrations_dir / filename).write_text(content)
+
+
+def test_apply_pending_migrations_applies_sql_and_py_migrations_in_order(tmp_path):
+    """Both .sql (run verbatim) and .py (must define migrate(conn)) migrations
+    are supported, and applied in filename order — the .py step here depends
+    on the table the .sql step created first."""
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    _write_migration(migrations_dir, "0001_create_foo.sql", "CREATE TABLE foo (id INTEGER PRIMARY KEY);")
+    _write_migration(
+        migrations_dir, "0002_seed_foo.py",
+        "def migrate(conn):\n    conn.execute('INSERT INTO foo (id) VALUES (1)')\n",
+    )
+    conn = sqlite3.connect(":memory:")
+    applied = apply_pending_migrations(conn, migrations_dir=str(migrations_dir))
+    assert applied == ["0001_create_foo.sql", "0002_seed_foo.py"]
+    assert conn.execute("SELECT id FROM foo").fetchone() == (1,)
+
+
+def test_apply_pending_migrations_is_idempotent(tmp_path):
+    """A second call with nothing new to apply is a no-op — migrations are
+    tracked by filename in schema_migrations, not re-detected by inspecting
+    the schema each time."""
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    _write_migration(migrations_dir, "0001_create_foo.sql", "CREATE TABLE foo (id INTEGER PRIMARY KEY);")
+    conn = sqlite3.connect(":memory:")
+    first = apply_pending_migrations(conn, migrations_dir=str(migrations_dir))
+    assert first == ["0001_create_foo.sql"]
+    second = apply_pending_migrations(conn, migrations_dir=str(migrations_dir))
+    assert second == []
+
+
+def test_apply_pending_migrations_only_applies_newly_added_ones(tmp_path):
+    """Simulates a later deploy that adds a new migration file: only the new
+    one is applied, the already-recorded one is left alone."""
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    _write_migration(migrations_dir, "0001_create_foo.sql", "CREATE TABLE foo (id INTEGER PRIMARY KEY);")
+    conn = sqlite3.connect(":memory:")
+    apply_pending_migrations(conn, migrations_dir=str(migrations_dir))
+
+    _write_migration(migrations_dir, "0002_create_bar.sql", "CREATE TABLE bar (id INTEGER PRIMARY KEY);")
+    second = apply_pending_migrations(conn, migrations_dir=str(migrations_dir))
+    assert second == ["0002_create_bar.sql"]
+
+
+def test_apply_pending_migrations_records_filename_and_timestamp(tmp_path):
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    _write_migration(migrations_dir, "0001_create_foo.sql", "CREATE TABLE foo (id INTEGER PRIMARY KEY);")
+    conn = sqlite3.connect(":memory:")
+    apply_pending_migrations(conn, migrations_dir=str(migrations_dir))
+    row = conn.execute("SELECT filename, applied_at FROM schema_migrations").fetchone()
+    assert row[0] == "0001_create_foo.sql"
+    assert row[1]
+
+
+# --- generate_backfill_migration_sql ---
+
+def test_generate_backfill_migration_sql_returns_none_when_nothing_new(db_conn):
+    assert generate_backfill_migration_sql(db_conn, "2023-01-01T00:00:00+00:00") is None
+
+
+def test_generate_backfill_migration_sql_excludes_windows_fetched_before_since(db_conn):
+    """A window fetched before the `since` cutoff (i.e. not from this call)
+    is not included — only what's new."""
+    db_conn.execute(
+        "INSERT INTO backfill_windows (start_date, end_date, status, fetched_at) VALUES (?, ?, 'fetched', ?)",
+        ("2023-01-01", "2023-01-10", "2023-01-01T00:00:00+00:00"),
+    )
+    db_conn.commit()
+    assert generate_backfill_migration_sql(db_conn, "2023-06-01T00:00:00+00:00") is None
+
+
+def test_generate_backfill_migration_sql_includes_new_data(db_conn):
+    """Everything a successful backfill call wrote — the window, its price/fx
+    rows, and the attempt record — shows up in the generated SQL."""
+    db_conn.execute(
+        "INSERT INTO backfill_windows (start_date, end_date, status, fetched_at) VALUES (?, ?, 'fetched', ?)",
+        ("2023-01-01", "2023-01-01", "2023-06-01T12:00:00+00:00"),
+    )
+    save_metal_prices(db_conn, "2023-01-01", {"gold": 1900.5})
+    save_fx_rates(db_conn, "2023-01-01", {"INR": 0.012})
+    record_backfill_attempt(db_conn, "2023-01-01", "success", "2023-06-01T12:00:00+00:00")
+
+    sql = generate_backfill_migration_sql(db_conn, "2023-06-01T00:00:00+00:00")
+
+    assert "metal_prices" in sql and "gold" in sql and "1900.5" in sql
+    assert "fx_rates" in sql and "INR" in sql
+    assert "backfill_windows" in sql
+    assert "backfill_attempts" in sql and "success" in sql
+
+
+def test_generate_backfill_migration_sql_output_is_replayable(db_conn, tmp_path):
+    """The generated script, run against a completely fresh DB, reproduces
+    the same rows — this is exactly what apply_pending_migrations() does
+    with it on the next boot."""
+    db_conn.execute(
+        "INSERT INTO backfill_windows (start_date, end_date, status, fetched_at) VALUES (?, ?, 'fetched', ?)",
+        ("2023-01-01", "2023-01-01", "2023-06-01T12:00:00+00:00"),
+    )
+    save_metal_prices(db_conn, "2023-01-01", {"gold": 1900.5})
+    save_fx_rates(db_conn, "2023-01-01", {"INR": 0.012})
+    sql = generate_backfill_migration_sql(db_conn, "2023-06-01T00:00:00+00:00")
+
+    fresh = sqlite3.connect(":memory:")
+    apply_pending_migrations(fresh)  # real project migrations: creates the schema first
+
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    (migrations_dir / "0001_data.sql").write_text(sql)
+    apply_pending_migrations(fresh, migrations_dir=str(migrations_dir))
+
+    assert fresh.execute("SELECT date, metal, price_usd FROM metal_prices").fetchone() == ("2023-01-01", "gold", 1900.5)
+    assert fresh.execute("SELECT date, currency, rate_to_usd FROM fx_rates").fetchone() == ("2023-01-01", "INR", 0.012)
+    assert fresh.execute("SELECT status FROM backfill_windows").fetchone() == ("fetched",)
+
+
+def test_apply_pending_migrations_against_the_real_project_migrations():
+    """Sanity check against this repo's actual migrations/ directory (the
+    default migrations_dir): a fresh in-memory DB ends up with every table
+    the app expects, with no errors from the real migration files."""
+    conn = sqlite3.connect(":memory:")
+    applied = apply_pending_migrations(conn)
+    assert "0001_initial_schema.sql" in applied
+    assert "0002_add_backfill_attempts_error_detail.py" in applied
+    assert "0003_add_admin_login_codes_status_and_synced_at.sql" in applied
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert {"metal_prices", "fx_rates", "backfill_windows", "backfill_attempts",
+            "github_sync_log", "admin_login_codes"} <= tables
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(admin_login_codes)")}
+    assert {"status", "synced_at"} <= columns
+
+
+# --- admin_login_codes: status / sync tracking ---
+
+def test_create_login_code_defaults_to_issued_status(db_conn):
+    create_login_code(db_conn, "a@example.com", "hash", "2023-01-01T00:00:00+00:00", "2023-01-01T00:10:00+00:00")
+    row = db_conn.execute("SELECT status, synced_at FROM admin_login_codes").fetchone()
+    assert row == ("issued", None)
+
+
+def test_create_login_code_records_rate_limited_status(db_conn):
+    create_login_code(
+        db_conn, "a@example.com", "", "2023-01-01T00:00:00+00:00", "2023-01-01T00:00:00+00:00",
+        ip="1.2.3.4", status="rate_limited_email",
+    )
+    row = db_conn.execute("SELECT status, ip FROM admin_login_codes").fetchone()
+    assert row == ("rate_limited_email", "1.2.3.4")
+
+
+def test_get_active_login_code_excludes_rate_limited_rows(db_conn):
+    """A rate-limited log row must never be returned as something verify-code
+    could match against — even if (hypothetically) its expires_at hadn't
+    already passed."""
+    create_login_code(
+        db_conn, "a@example.com", "somehash", "2023-01-01T00:00:00+00:00", "2099-01-01T00:00:00+00:00",
+        status="rate_limited_ip",
+    )
+    assert get_active_login_code(db_conn, "a@example.com", "2023-01-01T00:00:01+00:00") is None
+
+
+def test_generate_admin_login_migration_sql_returns_none_when_nothing_unsynced(db_conn):
+    assert generate_admin_login_migration_sql(db_conn, "2023-01-01T00:00:00+00:00") is None
+
+
+def test_generate_admin_login_migration_sql_includes_issued_rows_and_marks_them(db_conn):
+    create_login_code(db_conn, "a@example.com", "hash1", "2023-01-01T00:00:00+00:00", "2023-01-01T00:10:00+00:00")
+    result = generate_admin_login_migration_sql(db_conn, "2023-06-01T00:00:00+00:00")
+    assert result is not None
+    sql, row_ids = result
+    assert "a@example.com" in sql
+    assert len(row_ids) == 1
+
+    mark_login_codes_synced(db_conn, row_ids, "2023-06-01T00:00:00+00:00")
+    assert generate_admin_login_migration_sql(db_conn, "2023-06-02T00:00:00+00:00") is None
+
+
+def test_generate_admin_login_migration_sql_never_includes_rate_limited_rows(db_conn):
+    """Rate-limited log rows are for local visibility only — they never get
+    synced to GitHub, even when an unrelated issued code is pending too."""
+    create_login_code(db_conn, "a@example.com", "hash1", "2023-01-01T00:00:00+00:00", "2023-01-01T00:10:00+00:00")
+    create_login_code(
+        db_conn, "b@example.com", "", "2023-01-01T00:05:00+00:00", "2023-01-01T00:05:00+00:00",
+        ip="9.9.9.9", status="rate_limited_email",
+    )
+    sql, row_ids = generate_admin_login_migration_sql(db_conn, "2023-06-01T00:00:00+00:00")
+    assert "a@example.com" in sql
+    assert "b@example.com" not in sql
+    assert "rate_limited_email" not in sql
+    assert len(row_ids) == 1
+
+    mark_login_codes_synced(db_conn, row_ids, "2023-06-01T00:00:00+00:00")
+    # The rate-limited row is still there locally, just never synced.
+    remaining = db_conn.execute(
+        "SELECT email, synced_at FROM admin_login_codes WHERE status = 'rate_limited_email'"
+    ).fetchone()
+    assert remaining == ("b@example.com", None)
+
+
+def test_generate_admin_login_migration_sql_output_is_replayable_without_duplication(db_conn, tmp_path):
+    """The replayed row comes back with synced_at already set (not NULL) —
+    otherwise a fresh instance would think it's unsynced and re-commit it
+    forever, since admin_login_codes has no unique constraint to fall back on."""
+    create_login_code(db_conn, "a@example.com", "hash1", "2023-01-01T00:00:00+00:00", "2023-01-01T00:10:00+00:00")
+    sql, _row_ids = generate_admin_login_migration_sql(db_conn, "2023-06-01T00:00:00+00:00")
+
+    fresh = sqlite3.connect(":memory:")
+    apply_pending_migrations(fresh)
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    (migrations_dir / "0001_data.sql").write_text(sql)
+    apply_pending_migrations(fresh, migrations_dir=str(migrations_dir))
+
+    row = fresh.execute("SELECT email, status, synced_at FROM admin_login_codes").fetchone()
+    assert row == ("a@example.com", "issued", "2023-06-01T00:00:00+00:00")
