@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Landing page favicon (`web/assets/favicon.svg`/`.png`) and a matching header wordmark — a single
+  inline SVG reading "MT MetallicTrends" in a gold gradient, avoiding raster-scaling artifacts.
+- "Chart" link in the footer nav, alongside Pricing and Webmasters.
+- `GET /` auto-backfills stale metal prices on each load via `maybe_backfill()`, instead of relying
+  solely on a manual CLI run, throttled to at most 1 attempt per day spaced across the day.
+- `error_detail` column on `backfill_attempts` and a new `github_sync_log` table recording the outcome
+  of every DB-to-GitHub sync, so failures are diagnosable from the DB itself instead of only server logs.
+- `sync/github.py` (formerly `db_sync.py`) pushes the SQLite DB to GitHub after writes and restores it
+  on startup — a persistence workaround for Render's free-tier disk, which is otherwise wiped on every
+  redeploy.
+- `metallictrends-backfill`/`metallictrends-backup` console-script entry points.
+
+### Changed
+- Restructured the project into a `src/metallictrends/` package layout (`ingestion/`, `sync/`, `api/`),
+  replacing the flat top-level modules.
+- `needs_backfill` tolerates a 1-day gap between the latest stored date and today, and
+  `backfill_recent`'s catch-up window now ends on yesterday rather than today — metals.dev may not have
+  published the latest day's data yet.
+- `push_db_to_github` and homepage backfill attempts are both capped at 1 attempt per day; corrected the
+  default `GITHUB_BRANCH`.
+- Reworded B2C/Pricing landing-page copy to match the chart's actual current features instead of
+  unbuilt ones.
+- Broadened the B2B section from a "jewellery store" framing to "webmasters" running any site relevant
+  to gold/silver/other metal rates (jewellery, bullion, finance/investment) — renamed the nav/footer
+  link, plan card, and section heading accordingly.
+
+### Fixed
+- `_require_same_origin` falls back to checking the `Referer` header's origin when `Sec-Fetch-Site` is
+  absent, fixing legitimate same-origin requests that were incorrectly rejected with a 403.
+- `fetch_timeseries` raises a clear `MetalsApiError` on a null/empty `rates` payload from metals.dev,
+  instead of crashing downstream with a bare `AttributeError` — previously hit on every homepage load
+  whose catch-up window included today.
+
 ## [v0.2.0] - 2026-07-09
 
 Landing page rebuilt around a single interactive, multi-range price chart and served directly
