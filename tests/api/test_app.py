@@ -223,6 +223,31 @@ def test_request_code_sends_email_and_logs_the_request(api_db):
     assert row[0] == "recruiter@example.com"
 
 
+def test_request_code_returns_502_on_email_timeout(api_db):
+    """A hung/blocked SMTP connection (e.g. outbound SMTP blocked on the
+    hosting platform) must surface as a fast, clear 502 — not hang the
+    request indefinitely with no response for the frontend to react to."""
+    from metallictrends.notify.email import EmailSendTimeoutError
+    with patch("metallictrends.api.app.send_otp_email", side_effect=EmailSendTimeoutError("timed out")):
+        response = TestClient(api.app).post("/admin/auth/request-code", json={"email": "person@example.com"})
+    assert response.status_code == 502
+
+
+def test_request_code_returns_501_when_email_not_configured(api_db):
+    from metallictrends.notify.email import EmailNotConfiguredError
+    with patch("metallictrends.api.app.send_otp_email", side_effect=EmailNotConfiguredError("not configured")):
+        response = TestClient(api.app).post("/admin/auth/request-code", json={"email": "person@example.com"})
+    assert response.status_code == 501
+
+
+def test_request_code_returns_502_on_unexpected_email_error(api_db):
+    """Any other unexpected failure from the email send is also caught and
+    turned into a clean error response, not a bare 500 crash."""
+    with patch("metallictrends.api.app.send_otp_email", side_effect=RuntimeError("boom")):
+        response = TestClient(api.app).post("/admin/auth/request-code", json={"email": "person@example.com"})
+    assert response.status_code == 502
+
+
 def test_request_code_rate_limited(api_db):
     """Excess requests for the same email — from the same TestClient, so also
     the same source IP — are eventually rejected once either the per-email or

@@ -31,10 +31,11 @@ from metallictrends.db import (
     mark_login_codes_synced,
 )
 from metallictrends.ingestion.run import maybe_backfill
-from metallictrends.notify.email import send_otp_email
+from metallictrends.notify.email import EmailNotConfiguredError, EmailSendTimeoutError, send_otp_email
 from metallictrends.sync.github import commit_migration_file
 
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 GRAMS_PER_TROY_OZ = 31.1034768
 METALS = ("gold", "silver", "platinum", "palladium")
@@ -371,7 +372,17 @@ def admin_request_code(body: _RequestCodeBody, request: Request):
         expires_at = (now + timedelta(seconds=_CODE_TTL_SECONDS)).isoformat()
         create_login_code(conn, email, code_hash, now.isoformat(), expires_at, ip)
 
-    send_otp_email(email, code)
+    try:
+        send_otp_email(email, code)
+    except EmailSendTimeoutError as exc:
+        logger.error("Timed out sending OTP email to %s: %s", email, exc)
+        raise HTTPException(502, "Couldn't send the email right now — try again in a moment.")
+    except EmailNotConfiguredError as exc:
+        logger.error("Email is not configured: %s", exc)
+        raise HTTPException(501, "Admin login email is not configured on this server.")
+    except Exception as exc:
+        logger.error("Failed to send OTP email to %s: %s", email, exc, exc_info=True)
+        raise HTTPException(502, "Couldn't send the email right now — try again in a moment.")
     return {"status": "sent"}
 
 

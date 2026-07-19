@@ -15,10 +15,19 @@ from email.message import EmailMessage
 
 _SMTP_HOST = "smtp.gmail.com"
 _SMTP_PORT = 587
+_SMTP_TIMEOUT_SECONDS = 15
 
 
 class EmailNotConfiguredError(Exception):
     """Raised when GMAIL_ADDRESS/GMAIL_APP_PASSWORD aren't set."""
+
+
+class EmailSendTimeoutError(Exception):
+    """Raised when the SMTP connection doesn't complete within
+    _SMTP_TIMEOUT_SECONDS — smtplib.SMTP has no timeout by default, so
+    without this a blocked or silently-dropped outbound connection (some
+    PaaS platforms restrict outbound SMTP) would hang the request forever
+    instead of failing with a clear error."""
 
 
 def send_otp_email(to_email: str, code: str) -> None:
@@ -37,7 +46,13 @@ def send_otp_email(to_email: str, code: str) -> None:
         "If you didn't request this, you can safely ignore this email."
     )
 
-    with smtplib.SMTP(_SMTP_HOST, _SMTP_PORT) as smtp:
-        smtp.starttls()
-        smtp.login(gmail_address, gmail_app_password)
-        smtp.send_message(msg)
+    try:
+        with smtplib.SMTP(_SMTP_HOST, _SMTP_PORT, timeout=_SMTP_TIMEOUT_SECONDS) as smtp:
+            smtp.starttls()
+            smtp.login(gmail_address, gmail_app_password)
+            smtp.send_message(msg)
+    except TimeoutError as exc:
+        raise EmailSendTimeoutError(
+            f"Connecting to {_SMTP_HOST}:{_SMTP_PORT} timed out after {_SMTP_TIMEOUT_SECONDS}s — "
+            "the network this is running on may be blocking outbound SMTP."
+        ) from exc
