@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.3.0] - 2026-07-19
+
+Package restructured into a `src/` layout, a recurring metals.dev backfill crash tracked down and
+fixed, structured observability added for backfill and GitHub sync attempts, and the landing page's
+brand mark and B2B section reworked.
+
 ### Added
 - Landing page favicon (`web/assets/favicon.svg`/`.png`) and a matching header wordmark — a single
   inline SVG reading "MT MetallicTrends" in a gold gradient, avoiding raster-scaling artifacts.
