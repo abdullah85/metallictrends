@@ -12,6 +12,12 @@ _ENDPOINT = "https://api.metals.dev/v1/timeseries"
 _MAX_WINDOW_DAYS = 30
 
 
+class MetalsApiError(Exception):
+    """Raised when metals.dev responds 2xx with status "success" but no usable
+    rates — observed when a requested window includes a day whose data isn't
+    published yet (rates: null), a shape raise_for_status() can't catch."""
+
+
 def fetch_timeseries(start_date: str, end_date: str) -> dict:
     """Fetch daily metal prices and FX rates for [start_date, end_date].
 
@@ -43,4 +49,10 @@ def fetch_timeseries(start_date: str, end_date: str) -> dict:
         start_date, end_date, response.status_code,
     )
     response.raise_for_status()
-    return response.json()
+    data = response.json()
+    if not data.get("rates"):
+        raise MetalsApiError(
+            f"metals.dev returned no rates for {start_date} to {end_date} "
+            f"(status={data.get('status')!r}) — the data may not be published yet"
+        )
+    return data

@@ -1,7 +1,7 @@
 import pytest
 import requests
 from unittest.mock import patch
-from metallictrends.ingestion.client import fetch_timeseries
+from metallictrends.ingestion.client import fetch_timeseries, MetalsApiError
 
 
 def test_fetch_timeseries_returns_rates_for_10_days(mock_10_day_response):
@@ -53,3 +53,14 @@ def test_fetch_timeseries_logs_response_status_even_when_it_later_raises(mock_in
             with pytest.raises(requests.exceptions.HTTPError):
                 fetch_timeseries("2023-01-01", "2023-01-10")
     assert any("HTTP 401" in message for message in caplog.messages)
+
+
+def test_fetch_timeseries_raises_clear_error_on_null_rates(mock_null_rates_response):
+    """Reproduces the real, live-confirmed metals.dev response for a window
+    including a not-yet-published day (status "success", rates: null, HTTP
+    200). fetch_timeseries must raise a clear MetalsApiError here rather than
+    returning the payload as-is, which used to crash the caller with a bare
+    AttributeError: 'NoneType' object has no attribute 'items'."""
+    with patch("metallictrends.ingestion.client.requests.get", return_value=mock_null_rates_response):
+        with pytest.raises(MetalsApiError, match="2026-07-18"):
+            fetch_timeseries("2026-07-18", "2026-07-19")

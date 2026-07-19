@@ -119,21 +119,24 @@ def test_needs_backfill_defaults_to_real_today(db_conn):
 
 # --- backfill_recent ---
 
-def test_backfill_recent_covers_gap_up_to_today_when_under_3_months(db_conn, fake_fetch_timeseries):
+def test_backfill_recent_covers_gap_up_to_yesterday_when_under_3_months(db_conn, fake_fetch_timeseries):
     """When the gap since the last stored date is 3 months or less, backfill_recent
-    fetches exactly that gap: the day after the last date through today."""
+    fetches exactly that gap: the day after the last date through yesterday.
+    It never requests today itself, since metals.dev may not have published
+    today's rates yet (confirmed live: a window including today came back with
+    status "success" but rates: null)."""
     _seed_gold_price(db_conn, "2023-01-01")
     with patch("metallictrends.ingestion.run.fetch_timeseries", side_effect=fake_fetch_timeseries) as mock_fetch:
         backfill_recent(db_conn, today=date(2023, 1, 11))
-    mock_fetch.assert_called_once_with("2023-01-02", "2023-01-11")
+    mock_fetch.assert_called_once_with("2023-01-02", "2023-01-10")
 
 
 def test_backfill_recent_caps_at_1_month_in_1_request(db_conn, fake_fetch_timeseries):
     """When the DB is stale by much more than a month, backfill_recent caps the
-    window at 30 days from the last stored date (not the full gap up to today) —
-    a single request, per chunk_date_range's own 30-day window size. This keeps
-    a single homepage load bounded regardless of how stale the data is; catching
-    up the rest of the gap happens on subsequent loads."""
+    window at 30 days from the last stored date (not the full gap up to
+    yesterday) — a single request, per chunk_date_range's own 30-day window
+    size. This keeps a single homepage load bounded regardless of how stale
+    the data is; catching up the rest of the gap happens on subsequent loads."""
     _seed_gold_price(db_conn, "2023-01-01")
     with patch("metallictrends.ingestion.run.fetch_timeseries", side_effect=fake_fetch_timeseries) as mock_fetch:
         backfill_recent(db_conn, today=date(2024, 1, 1))
@@ -156,6 +159,15 @@ def test_backfill_recent_returns_false_on_failure(db_conn):
         success, error_detail = backfill_recent(db_conn, today=date(2023, 1, 11))
     assert success is False
     assert "boom" in error_detail
+
+
+def test_backfill_recent_never_requests_today(db_conn, fake_fetch_timeseries):
+    """Even with only a 2-day gap (the minimum that triggers needs_backfill),
+    backfill_recent's window ends on yesterday, not today."""
+    _seed_gold_price(db_conn, "2023-01-01")
+    with patch("metallictrends.ingestion.run.fetch_timeseries", side_effect=fake_fetch_timeseries) as mock_fetch:
+        backfill_recent(db_conn, today=date(2023, 1, 3))
+    mock_fetch.assert_called_once_with("2023-01-02", "2023-01-02")
 
 
 def test_backfill_recent_records_fetched_windows(db_conn, fake_fetch_timeseries):

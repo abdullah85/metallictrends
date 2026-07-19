@@ -51,7 +51,9 @@ def _max_gold_date(db_path: str) -> str:
 
 def test_homepage_triggers_backfill_when_data_is_stale(api_db, fake_fetch_timeseries):
     """GET / backfills the gap first when the DB's last date is behind today, so
-    the page renders with freshly caught-up data instead of stale data."""
+    the page renders with freshly caught-up data instead of stale data. The
+    catch-up window ends yesterday, not today — metals.dev may not have
+    published today's rates yet."""
     stale_last_date = (date.today() - timedelta(days=5)).isoformat()
     _seed_gold_series(api_db, stale_last_date)
 
@@ -59,11 +61,12 @@ def test_homepage_triggers_backfill_when_data_is_stale(api_db, fake_fetch_timese
         response = TestClient(api.app).get("/")
 
     assert response.status_code == 200
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
     mock_fetch.assert_called_once_with(
         (date.fromisoformat(stale_last_date) + timedelta(days=1)).isoformat(),
-        date.today().isoformat(),
+        yesterday,
     )
-    assert _max_gold_date(api_db) == date.today().isoformat()
+    assert _max_gold_date(api_db) == yesterday
 
 
 def test_homepage_skips_backfill_when_data_is_current(api_db, fake_fetch_timeseries):

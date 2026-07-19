@@ -124,3 +124,24 @@ def mock_http_error_response():
         "500 Internal Server Error", response=http_response
     )
     return mock
+
+
+@pytest.fixture
+def mock_null_rates_response():
+    """Reproduces the real response captured live from metals.dev for a window
+    including a not-yet-published day: HTTP 200, raise_for_status() is a
+    no-op, status "success", but rates is null rather than a dict. This used
+    to reach run_backfill as a bare AttributeError: 'NoneType' object has no
+    attribute 'items'."""
+    mock = Mock()
+    mock.status_code = 200
+    mock.raise_for_status.return_value = None
+    mock.json.return_value = {
+        "status": "success",
+        "currency": "USD",
+        "unit": "toz",
+        "start_date": "2026-07-18",
+        "end_date": "2026-07-19",
+        "rates": None,
+    }
+    return mock

@@ -58,15 +58,19 @@ def needs_backfill(conn: sqlite3.Connection, today: date | None = None) -> bool:
 
 
 def backfill_recent(conn: sqlite3.Connection, today: date | None = None) -> tuple[bool, str | None]:
-    """Catch up from the day after the latest stored date, capped at 1 month
-    (30 days) thus capping the backend call to at most 1 request.
-    Assumes needs_backfill(conn, today) is already True. Returns (True, None)
-    if the window fetched successfully, (False, error_detail) if it failed."""
+    """Catch up from the day after the latest stored date through yesterday,
+    capped at 1 month (30 days) thus capping the backend call to at most 1
+    request. Never requests today itself — metals.dev may not have published
+    today's rates yet (same assumption needs_backfill's 1-day tolerance makes),
+    and catching up to yesterday satisfies that tolerance so this won't
+    retrigger until tomorrow. Assumes needs_backfill(conn, today) is already
+    True. Returns (True, None) if the window fetched successfully,
+    (False, error_detail) if it failed."""
     row = conn.execute("SELECT MAX(date) AS d FROM metal_prices").fetchone()
     last = date.fromisoformat(row[0])
     today = today or date.today()
     start = last + timedelta(days=1)
-    end = min(start + timedelta(days=30), today)
+    end = min(start + timedelta(days=30), today - timedelta(days=1))
     return run_backfill(conn, start.isoformat(), end.isoformat())
 
 
