@@ -58,25 +58,30 @@ def _sql_literal(value) -> str:
 
 def generate_backfill_migration_sql(conn: sqlite3.Connection, since: str) -> str | None:
     """Builds a data-migration SQL script replaying whatever a backfill call
-    just wrote: any backfill_windows marked 'fetched' at or after `since`
-    (captured just before the call), the metal_prices/fx_rates rows for
-    those windows' date ranges, and the matching backfill_attempts rows.
-    Returns None if nothing new was fetched (e.g. the attempt failed).
+    just wrote: any backfill_windows row touched at or after `since`
+    (captured just before the call) — whether it ended up 'fetched' or
+    'failed' — this ensures that we do not repeat the same calls ensuring a cool off
+    period set to a day currently.
 
     This is the alternative to committing the whole binary metals.db file on
     every backfill: a small, diffable, human-readable script that
     apply_pending_migrations() replays on a freshly-restored DB after a
     Render restart, instead of restoring a giant opaque blob."""
     windows = conn.execute(
-        """SELECT start_date, end_date, fetched_at FROM backfill_windows
-           WHERE status = 'fetched' AND fetched_at >= ? ORDER BY start_date""",
+        """SELECT start_date, end_date, status, fetched_at FROM backfill_windows
+           WHERE fetched_at >= ? ORDER BY start_date""",
         (since,),
     ).fetchall()
-    if not windows:
+    attempts = conn.execute(
+        """SELECT attempt_date, attempted_at, status, error_detail
+           FROM backfill_attempts WHERE attempted_at >= ? ORDER BY attempted_at""",
+        (since,),
+    ).fetchall()
+    if not windows and not attempts:
         return None
 
     lines = []
-    for start_date, end_date, fetched_at in windows:
+    for start_date, end_date, status, fetched_at in windows:
         for d, metal, price_usd in conn.execute(
             "SELECT date, metal, price_usd FROM metal_prices WHERE date BETWEEN ? AND ? ORDER BY date, metal",
             (start_date, end_date),
@@ -94,14 +99,11 @@ def generate_backfill_migration_sql(conn: sqlite3.Connection, since: str) -> str
                 f"VALUES ({_sql_literal(d)}, {_sql_literal(currency)}, {rate_to_usd});"
             )
         lines.append(
-            f"INSERT OR IGNORE INTO backfill_windows (start_date, end_date, status, fetched_at) "
-            f"VALUES ({_sql_literal(start_date)}, {_sql_literal(end_date)}, 'fetched', {_sql_literal(fetched_at)});"
+            f"INSERT INTO backfill_windows (start_date, end_date, status, fetched_at) "
+            f"VALUES ({_sql_literal(start_date)}, {_sql_literal(end_date)}, {_sql_literal(status)}, {_sql_literal(fetched_at)}) "
+            f"ON CONFLICT(start_date, end_date) DO UPDATE SET status = excluded.status, fetched_at = excluded.fetched_at;"
         )
-    for attempt_date, attempted_at, status, error_detail in conn.execute(
-        """SELECT attempt_date, attempted_at, status, error_detail
-           FROM backfill_attempts WHERE attempted_at >= ?""",
-        (since,),
-    ):
+    for attempt_date, attempted_at, status, error_detail in attempts:
         lines.append(
             f"INSERT INTO backfill_attempts (attempt_date, attempted_at, status, error_detail) "
             f"VALUES ({_sql_literal(attempt_date)}, {_sql_literal(attempted_at)}, "
@@ -136,7 +138,12 @@ def save_fx_rates(conn: sqlite3.Connection, date: str, currencies: dict) -> None
 def update_window_status(
     conn: sqlite3.Connection, start_date: str, end_date: str, status: str
 ) -> None:
-    fetched_at = datetime.now(timezone.utc).isoformat() if status == "fetched" else None
+    """`fetched_at` is set on every status transition, and thus,
+    it doubles as "last touched at" so generate_backfill_migration_sql can
+    pick up a failed window's status change too, otherwise a failure made
+    right before a Render restart is invisible to the next migration and
+    the window silently reverts to whatever's in git."""
+    fetched_at = datetime.now(timezone.utc).isoformat()
     conn.execute(
         """UPDATE backfill_windows
            SET status = ?, fetched_at = ?

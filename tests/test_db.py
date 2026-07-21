@@ -1,4 +1,5 @@
 import sqlite3
+from datetime import datetime, timezone
 
 import pytest
 from metallictrends.db import (
@@ -252,6 +253,70 @@ def test_generate_backfill_migration_sql_includes_new_data(db_conn):
     assert "fx_rates" in sql and "INR" in sql
     assert "backfill_windows" in sql
     assert "backfill_attempts" in sql and "success" in sql
+
+
+def test_generate_backfill_migration_sql_includes_failed_attempt_with_no_fetched_window(db_conn):
+    """A failed backfill attempt writes no 'fetched' window, but its
+    backfill_attempts row must still be persisted — otherwise the daily
+    attempt-count and last-failure-timestamp throttles in maybe_backfill
+    reset every time Render restarts, letting it hammer a downed
+    metals.dev again right away."""
+    record_backfill_attempt(db_conn, "2023-01-01", "failed", "2023-06-01T12:00:00+00:00", error_detail="boom")
+
+    sql = generate_backfill_migration_sql(db_conn, "2023-06-01T00:00:00+00:00")
+
+    assert sql is not None
+    assert "backfill_attempts" in sql and "failed" in sql and "boom" in sql
+
+
+def test_generate_backfill_migration_sql_includes_failed_window(db_conn):
+    """A window that failed (not just one that succeeded) must show up too —
+    otherwise its status silently reverts to whatever's in git on the next
+    Render restart, defeating _is_fetched's bookkeeping of what's already
+    been attempted."""
+    db_conn.execute(
+        "INSERT INTO backfill_windows (start_date, end_date, status, fetched_at) VALUES (?, ?, 'pending', NULL)",
+        ("2023-01-01", "2023-01-30"),
+    )
+    db_conn.commit()
+    update_window_status(db_conn, "2023-01-01", "2023-01-30", "failed")
+
+    sql = generate_backfill_migration_sql(db_conn, "2023-01-01T00:00:00+00:00")
+
+    assert sql is not None
+    assert "backfill_windows" in sql and "failed" in sql
+
+
+def test_generate_backfill_migration_sql_replay_upserts_window_status(db_conn, tmp_path):
+    """A window that fails on one call and succeeds on a later retry produces
+    two migration files (one per call). Replaying both in order must leave
+    the window 'fetched' — an INSERT OR IGNORE would keep whichever file
+    landed first (the failure) since the row already exists on the second
+    file's replay, permanently misreporting a window that actually succeeded."""
+    db_conn.execute(
+        "INSERT INTO backfill_windows (start_date, end_date, status, fetched_at) VALUES (?, ?, 'pending', NULL)",
+        ("2023-01-01", "2023-01-30"),
+    )
+    db_conn.commit()
+    update_window_status(db_conn, "2023-01-01", "2023-01-30", "failed")
+    failed_sql = generate_backfill_migration_sql(db_conn, "2023-01-01T00:00:00+00:00")
+
+    since = datetime.now(timezone.utc).isoformat()
+    update_window_status(db_conn, "2023-01-01", "2023-01-30", "fetched")
+    fetched_sql = generate_backfill_migration_sql(db_conn, since)
+
+    fresh = sqlite3.connect(":memory:")
+    apply_pending_migrations(fresh)
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    (migrations_dir / "0001_failed.sql").write_text(failed_sql)
+    (migrations_dir / "0002_fetched.sql").write_text(fetched_sql)
+    apply_pending_migrations(fresh, migrations_dir=str(migrations_dir))
+
+    assert fresh.execute(
+        "SELECT status FROM backfill_windows WHERE start_date = ? AND end_date = ?",
+        ("2023-01-01", "2023-01-30"),
+    ).fetchone() == ("fetched",)
 
 
 def test_generate_backfill_migration_sql_output_is_replayable(db_conn, tmp_path):
